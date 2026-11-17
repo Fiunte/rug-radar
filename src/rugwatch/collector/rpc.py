@@ -66,6 +66,9 @@ class Provider:
             self._fails = 0
 
 
+BANDWIDTH_METERED = frozenset({"fluxrpc"})
+
+
 def providers_from_env(max_rps: float) -> list[Provider]:
     """Build the provider chain from environment variables. Missing keys drop that tier."""
     out: list[Provider] = []
@@ -146,6 +149,9 @@ class RpcClient:
         result: Any = None
         try:
             resp = await self.http.post(provider.url, json=body)
+            if provider.name in BANDWIDTH_METERED:  # FluxRPC's free plan is limited by bytes (D-33)
+                self.budget.state.bandwidth_add(time.time(), f"{provider.name}_http",
+                                                len(resp.content) + len(json.dumps(body)))
             if resp.status_code != 200:
                 payload = {"error": f"http_{resp.status_code}"}
             else:

@@ -23,7 +23,7 @@ make backup        # on the DESKTOP: pull data/ from the laptop over SSH (docs/r
 ```
 
 Environment variables (in `.env`, never committed): `HELIUS_API_KEY` (required), `ALCHEMY_API_KEY`
-(fallback), `FLUXRPC_RPC_URL` (optional emergency tier: the dashboard's "RPC" URL), `SOLANATRACKER_API_KEY` (from day 3),
+(fallback), `FLUXRPC_API_KEY` (optional: emergency RPC tier and the websocket fallback of the create-log stream; `FLUXRPC_RPC_URL` / `FLUXRPC_WS_URL` override the URLs), `SOLANATRACKER_API_KEY` (from day 3),
 `RUGCHECK_API_KEY` (optional), `HELIUS_BILLING_DAY` (optional, day of month the credits reset).
 
 Service control:

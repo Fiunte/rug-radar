@@ -178,7 +178,8 @@ def test_coverage_check(env_factory: Any, pump_fixture: dict[str, Any], monkeypa
     db_path = tmp_path / "state.sqlite"
     env.state.db.execute(f"VACUUM INTO '{db_path}'")
     lines = report.launch_source_lines(sqlite3.connect(db_path), time.time())
-    assert "all=88.9%" in lines[1] and "publicrpc=66.7%" in lines[1] and "ALERT: below 95%" in lines[1]
+    cov_line = next(line for line in lines if line.startswith("launch coverage"))
+    assert "all=88.9%" in cov_line and "publicrpc=66.7%" in cov_line and "ALERT: below 95%" in cov_line
 
 
 def test_coverage_due_window() -> None:
@@ -226,3 +227,117 @@ def test_report_day1_counts_only_launches_after_the_data_clock(tmp_path: Path,
     day1 = "\n".join(report.report_day1(cfg))
     assert "Data clock start:" in day1 and "Launches: 20 observed" in day1
     assert "share of launches that reached it: n=20" in day1
+
+
+# ------------------------------------------------------- FluxRPC fallback (D-33)
+def test_rate_limited_public_endpoint_switches_to_fluxrpc_and_back(tmp_path: Path,
+                                                                   monkeypatch: pytest.MonkeyPatch) -> None:
+    import http
+
+    from rugwatch.collector import launchlogs
+
+    monkeypatch.setattr(launchlogs, "RETRY_PUBLIC_AFTER_S", 0.3)  # retry the public endpoint quickly
+    state = State(":memory:")
+    writer = RawWriter(tmp_path, min_free_bytes=0)
+
+    def reject(connection: Any, request: Any) -> Any:
+        return connection.respond(http.HTTPStatus.TOO_MANY_REQUESTS, "rate limited\n")
+
+    async def public_handler(ws: ServerConnection) -> None:
+        await ws.wait_closed()
+
+    async def fallback_handler(ws: ServerConnection) -> None:
+        await ws.recv()
+        await ws.send(json.dumps({"jsonrpc": "2.0", "result": 3, "id": 1}))
+        for i in range(3):
+            await ws.send(json.dumps(NOTIFICATIONS[i]))
+        while True:
+            await asyncio.sleep(0.05)
+            await ws.send(json.dumps(NOTIFICATIONS[3]))  # keeps messages flowing (not a launch)
+
+    async def go() -> None:
+        async with serve(public_handler, "127.0.0.1", 0, process_request=reject) as pub, \
+                serve(fallback_handler, "127.0.0.1", 0) as flux:
+            urls = [f"ws://127.0.0.1:{s.sockets[0].getsockname()[1]}" for s in (pub, flux)]
+            listener = ChainLaunchListener(state, writer, 60, url=urls[0], fallback_url=urls[1])
+            task = asyncio.create_task(listener.run())
+            for _ in range(300):
+                await asyncio.sleep(0.02)
+                if state.one("SELECT COUNT(*) FROM events WHERE kind='rpcws_switch'") >= 3:
+                    break
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(go())
+    switches = [json.loads(r["detail"]) for r in state.q("SELECT detail FROM events WHERE kind='rpcws_switch' "
+                                                         "ORDER BY id")]
+    assert switches[0] == {"from": "publicrpc", "to": "fluxrpc", "reason": "rate_limited"}
+    assert switches[1] == {"from": "fluxrpc", "to": "publicrpc", "reason": "retry_public"}
+    assert switches[2] == {"from": "publicrpc", "to": "fluxrpc", "reason": "rate_limited"}
+    assert state.one("SELECT COUNT(*) FROM tokens") == 3
+    assert {r["source"] for r in state.q("SELECT source FROM launch_sources")} == {"fluxrpc"}
+    writer.flush()
+    assert len(list(iter_raw(tmp_path, "fluxrpc", "new_token"))) >= 3
+    assert state.bandwidth_month("fluxrpc", time.time()) > 30_000  # three ~9 KB notifications at least
+    assert state.get_meta("launch_ws_endpoint") in ("fluxrpc", "publicrpc")
+
+
+def test_fallback_respects_the_bandwidth_budget() -> None:
+    from rugwatch.collector import launchlogs
+
+    state = State(":memory:")
+    now = time.time()
+    no_fallback = ChainLaunchListener(state, RawWriter.__new__(RawWriter), 60)
+    assert not no_fallback.fallback_allowed(now)
+    listener = ChainLaunchListener(state, RawWriter.__new__(RawWriter), 60, fallback_url="wss://x")
+    assert listener.fallback_allowed(now)
+    state.bandwidth_add(now, "fluxrpc_ws", int(0.85 * launchlogs.FLUXRPC_MONTHLY_LIMIT_BYTES))
+    assert listener.fallback_allowed(now)
+    state.bandwidth_add(now, "fluxrpc_http", int(0.06 * launchlogs.FLUXRPC_MONTHLY_LIMIT_BYTES))
+    assert not listener.fallback_allowed(now)  # ws + http over 90%
+    assert state.bandwidth_month("fluxrpc", now + 40 * 86400) == 0  # a new month starts from zero
+
+
+def test_status_flags_the_fallback_and_bandwidth(tmp_path: Path) -> None:
+    state = State(tmp_path / "s.sqlite")
+    now = time.time()
+    db = sqlite3.connect(tmp_path / "s.sqlite")
+    assert "via publicrpc" in report.stream_endpoint_line(db, now)
+    assert "FALLBACK" not in report.stream_endpoint_line(db, now)
+    state.set_meta("launch_ws_endpoint", "fluxrpc")
+    state.set_meta("launch_ws_endpoint_since", repr(now - 60))
+    state.event("rpcws_switch", {"from": "publicrpc", "to": "fluxrpc", "reason": "rate_limited"})
+    state.bandwidth_add(now, "fluxrpc_ws", 8_100_000_000)
+    line = report.stream_endpoint_line(db, now)
+    assert "via fluxrpc" in line and "switches_24h=1" in line and "ON THE FLUXRPC FALLBACK" in line
+    assert "8.10 of 10 GB" in line and "ALERT: FluxRPC at 81%" in line
+
+
+def test_fluxrpc_ws_url_and_http_metering(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import httpx
+
+    from rugwatch.collector.budget import Budget
+    from rugwatch.collector.launchlogs import fluxrpc_ws_url
+    from rugwatch.collector.rpc import Provider, RpcClient
+
+    for name in ("FLUXRPC_WS_URL", "FLUXRPC_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    assert fluxrpc_ws_url() is None
+    monkeypatch.setenv("FLUXRPC_API_KEY", "k")
+    assert fluxrpc_ws_url() == "wss://ws.eu.fluxrpc.com?key=k"
+    monkeypatch.setenv("FLUXRPC_WS_URL", " wss://dash.example/ws ")
+    assert fluxrpc_ws_url() == "wss://dash.example/ws"
+
+    state = State(":memory:")
+    budget = Budget(state, make_cfg().collector.budget)
+    transport = httpx.MockTransport(lambda r: httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": 5}))
+
+    async def go() -> None:
+        async with httpx.AsyncClient(transport=transport) as http_client:
+            rpc = RpcClient([Provider("fluxrpc", "https://flux.test/?key=k", max_rps=1000)],
+                            RawWriter(tmp_path, min_free_bytes=0), budget, client=http_client)
+            assert (await rpc.call("getSlot", [], kind="accounts", purpose="filter")).ok
+
+    asyncio.run(go())
+    assert state.one("SELECT messages FROM bandwidth_ledger WHERE channel='fluxrpc_http'") == 1
+    assert state.bandwidth_month("fluxrpc", time.time()) > 50

@@ -80,11 +80,21 @@ CREATE TABLE IF NOT EXISTS launch_sources (
   PRIMARY KEY (mint, source)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS launch_sources_sig ON launch_sources(sig);
+
+-- Bytes received/sent per UTC calendar month and channel (D-33), e.g. FluxRPC's 10 GB/month limit.
+CREATE TABLE IF NOT EXISTS bandwidth_ledger (
+  month TEXT NOT NULL, channel TEXT NOT NULL, bytes INTEGER NOT NULL DEFAULT 0,
+  messages INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (month, channel)
+) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 """
 
 # Columns added after the first deployment: (table, column, definition). Applied once, idempotent.
 MIGRATIONS = (("heartbeats", "rpcws_connected", "INTEGER NOT NULL DEFAULT 0"),)
+
+
+def month_key(ts: float) -> str:
+    return time.strftime("%Y-%m", time.gmtime(ts))
 
 
 class State:
@@ -132,6 +142,16 @@ class State:
                "ON CONFLICT(minute) DO UPDATE SET ws_connected=MAX(ws_connected,excluded.ws_connected), "
                "rpcws_connected=MAX(rpcws_connected,excluded.rpcws_connected)",
                (int(now // 60), int(ws_connected), int(rpcws_connected)))
+
+    def bandwidth_add(self, ts: float, channel: str, nbytes: int) -> None:
+        self.x("INSERT INTO bandwidth_ledger(month,channel,bytes,messages) VALUES(?,?,?,1) "
+               "ON CONFLICT(month,channel) DO UPDATE SET bytes=bytes+excluded.bytes, messages=messages+1",
+               (month_key(ts), channel, nbytes))
+
+    def bandwidth_month(self, prefix: str, ts: float) -> int:
+        """Bytes this UTC calendar month over the channels whose name starts with `prefix`."""
+        return int(self.one("SELECT COALESCE(SUM(bytes),0) FROM bandwidth_ledger WHERE month=? AND channel LIKE ?",
+                            (month_key(ts), prefix + "%")))
 
     def data_clock_start(self) -> float | None:
         """Start of the current data clock (D-32): launches observed earlier are pre-fix data."""

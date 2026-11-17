@@ -19,7 +19,9 @@ from dotenv import load_dotenv
 from rugwatch.chain.pump_layout import LAMPORTS_PER_SOL, SOL_QUOTE_MINTS
 from rugwatch.collector.budget import METERED_SOURCE, cycle_start, hour_key
 from rugwatch.collector.coverage import COVERAGE_ALERT
+from rugwatch.collector.launchlogs import FLUXRPC_ALERT_SHARE, FLUXRPC_MONTHLY_LIMIT_BYTES
 from rugwatch.collector.main import billing_day, raw_root, state_path
+from rugwatch.collector.state import month_key
 from rugwatch.config import REPO_ROOT, Config, load_config
 from rugwatch.storage.raw import dir_size_bytes
 
@@ -166,6 +168,32 @@ def status(cfg: Config) -> list[str]:
     return out
 
 
+def stream_endpoint_line(db: sqlite3.Connection, now: float) -> str:
+    """Which endpoint carries the create-log stream, switches, and FluxRPC bandwidth this month (D-33)."""
+    meta = dict(db.execute("SELECT key, value FROM meta WHERE key IN "
+                           "('launch_ws_endpoint','launch_ws_endpoint_since')").fetchall())
+    endpoint = meta.get("launch_ws_endpoint", "publicrpc")
+    since = meta.get("launch_ws_endpoint_since")
+    switches = db.execute("SELECT COUNT(*) FROM events WHERE kind='rpcws_switch' AND ts>=?",
+                          (now - 86400,)).fetchone()[0]
+    tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    used: dict[str, int] = {}
+    if "bandwidth_ledger" in tables:
+        used = dict(db.execute("SELECT channel, bytes FROM bandwidth_ledger WHERE month=? AND channel LIKE "
+                               "'fluxrpc%'", (month_key(now),)).fetchall())
+    total = sum(used.values())
+    share = total / FLUXRPC_MONTHLY_LIMIT_BYTES
+    since_txt = f" since {datetime.fromtimestamp(float(since), UTC):%m-%d %H:%M} UTC" if since else ""
+    line = (f"create-log stream: via {endpoint}{since_txt}  switches_24h={switches}  fluxrpc bandwidth "
+            f"{month_key(now)}: {total / 1e9:.2f} of {FLUXRPC_MONTHLY_LIMIT_BYTES / 1e9:.0f} GB "
+            f"(ws {used.get('fluxrpc_ws', 0) / 1e9:.2f}, http {used.get('fluxrpc_http', 0) / 1e9:.2f})")
+    if endpoint != "publicrpc":
+        line += "   <-- ON THE FLUXRPC FALLBACK (the public RPC rate-limited us)"
+    if share >= FLUXRPC_ALERT_SHARE:
+        line += f"   <-- ALERT: FluxRPC at {share:.0%} of its monthly bandwidth"
+    return line
+
+
 def launch_source_lines(db: sqlite3.Connection, now: float) -> list[str]:
     """Public-RPC launch stream health and the latest launch-coverage check (D-31)."""
     def count(kind: str, since: float) -> int:
@@ -177,6 +205,7 @@ def launch_source_lines(db: sqlite3.Connection, now: float) -> list[str]:
     out = [f"public rpc launch stream drops: total={count('rpcws_drop', 0)}  "
            f"last_24h={count('rpcws_drop', now - 86400)}  disconnected_24h={gap_s:.0f} s  rate_limited_24h={limited}"
            + ("   <-- ALERT: the public RPC is rate-limiting us (see decisions D-31 fallback)" if limited else "")]
+    out.append(stream_endpoint_line(db, now))
     row = db.execute("SELECT ts, detail FROM events WHERE kind='coverage_check' ORDER BY ts DESC LIMIT 1").fetchone()
     if row is None:
         out.append("launch coverage: no check yet (first one about 65 min after the public-RPC stream starts)")

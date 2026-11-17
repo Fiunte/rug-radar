@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import os
 import signal
@@ -22,7 +23,7 @@ from dotenv import load_dotenv
 from rugwatch import __version__
 from rugwatch.collector.budget import Budget
 from rugwatch.collector.coverage import LAG_S, coverage_loop, run_check
-from rugwatch.collector.launchlogs import ChainLaunchListener
+from rugwatch.collector.launchlogs import PUBLIC_WS_URL, SUBSCRIBE, ChainLaunchListener, fluxrpc_ws_url
 from rugwatch.collector.pumpportal import PumpPortalListener
 from rugwatch.collector.rpc import RpcClient, providers_from_env
 from rugwatch.collector.scanners import build_scanners
@@ -41,8 +42,8 @@ STALL_RESTART_S = 600.0  # decision D-26: ~5x the longest gap between launches s
 HOUSEKEEPING_S = 5.0
 STATE_KEEP_DAYS = 21  # untracked launches older than this leave the state database (raw keeps them)
 REQUIRED_ENV = ("HELIUS_API_KEY",)
-OPTIONAL_ENV = ("ALCHEMY_API_KEY", "FLUXRPC_RPC_URL", "FLUXRPC_API_KEY", "SOLANATRACKER_API_KEY", "RUGCHECK_API_KEY",
-                "GOPLUS_API_KEY", "HELIUS_BILLING_DAY")
+OPTIONAL_ENV = ("ALCHEMY_API_KEY", "FLUXRPC_API_KEY", "FLUXRPC_RPC_URL", "FLUXRPC_WS_URL",
+                "SOLANATRACKER_API_KEY", "RUGCHECK_API_KEY", "GOPLUS_API_KEY", "HELIUS_BILLING_DAY")
 
 
 def data_base() -> Path:
@@ -156,7 +157,7 @@ async def run_collector(cfg: Config) -> int:
     snapshotter = Snapshotter(cfg, state, rpc, writer, scanners, http)
     scheduler = Scheduler(cfg, state, rpc, writer, budget, snapshotter)
     listener = PumpPortalListener(cfg.collector.pumpportal, cfg.activity_filter, state, writer)
-    chain = ChainLaunchListener(state, writer, min(cfg.activity_filter.tick_s))
+    chain = ChainLaunchListener(state, writer, min(cfg.activity_filter.tick_s), fallback_url=fluxrpc_ws_url())
 
     now = time.time()
     clock = start_data_clock(state, writer, cfg, now)
@@ -259,7 +260,27 @@ async def check_env(cfg: Config) -> int:
             print(f"rpc {provider.name:10s} {detail}")
             if provider.name == cfg.collector.rpc.primary and not good:
                 ok = False
+    for name, url in (("publicrpc", PUBLIC_WS_URL), ("fluxrpc", fluxrpc_ws_url())):
+        print(f"ws  {name:10s} {await ws_check(url) if url else 'not configured'}")
     return 0 if ok else EXIT_CONFIG
+
+
+async def ws_check(url: str, timeout_s: float = 30.0) -> str:
+    """Subscribe to the create logs and wait for one notification. Prints no URL (it may hold a key)."""
+    from websockets.asyncio.client import connect
+
+    started = time.monotonic()
+    try:
+        async with connect(url, open_timeout=15, max_size=2**23) as ws:
+            await ws.send(json.dumps(SUBSCRIBE))
+            reply = json.loads(await asyncio.wait_for(ws.recv(), 15))
+            if not isinstance(reply, dict) or "result" not in reply:
+                return "subscription refused"
+            await asyncio.wait_for(ws.recv(), timeout_s)
+            return f"ok (first create log after {time.monotonic() - started:.1f} s)"
+    except Exception as exc:  # the message may contain the URL: type only
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        return type(exc).__name__ + (f" http_{status}" if status else "")
 
 
 async def coverage_now(cfg: Config, minutes: float) -> int:
