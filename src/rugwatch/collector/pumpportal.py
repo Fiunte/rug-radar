@@ -16,7 +16,7 @@ from rugwatch.storage.raw import DiskFullError, RawWriter, make_record
 
 log = logging.getLogger("rugwatch.pumpportal")
 
-STALE_AFTER_S = 60.0  # no message for this long = dead connection (launches arrive ~every 3 s)
+STALE_AFTER_S = 180.0  # no message for this long = reconnect (D-28; natural silences reach ~110 s)
 ALLOWED_STREAMS = frozenset({"subscribeNewToken", "subscribeMigration"})
 PUMP_POOL = "pump"
 
@@ -42,6 +42,7 @@ class PumpPortalListener:
         self.writer = writer
         self.connected = False
         self.last_message_at: float | None = None
+        self.last_launch_at = time.time()  # last pump.fun launch (stall watchdog, D-26)
         self._dropped_at: float | None = None
 
     def handle(self, msg: dict[str, Any], observed_at: float) -> str:
@@ -54,6 +55,7 @@ class PumpPortalListener:
             kind="migration" if kind == "migrate" else "new_token", purpose="launch_log",
             status="ok", payload=msg, mint=mint if isinstance(mint, str) else None))
         if kind == "create" and isinstance(mint, str):
+            self.last_launch_at = max(self.last_launch_at, observed_at)
             self.state.add_token(mint, observed_at, msg, observed_at + self.first_tick_s)
         elif kind == "migrate" and isinstance(mint, str):
             self.state.x("UPDATE tracking SET graduated_ts=COALESCE(graduated_ts,?) WHERE mint=?",

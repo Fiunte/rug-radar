@@ -194,3 +194,52 @@ def test_reports_run_on_collector_state(tmp_path: Path, monkeypatch: pytest.Monk
     assert "share with a tip: 50.0%" in week1
     status = "\n".join(report.status(cfg))
     assert "launches=200" in status and "websocket drops: total=1" in status
+
+
+# ----------------------------------------------------------------- watchdog
+def test_stall_watchdog_logs_and_raises(tmp_path: Path) -> None:
+    from rugwatch.collector import main
+
+    cfg = make_cfg()
+    state = State(":memory:")
+    listener = PumpPortalListener(cfg.collector.pumpportal, cfg.activity_filter, state,
+                                  RawWriter(tmp_path, min_free_bytes=0))
+    t = time.time()
+    listener.handle(CREATE, t)
+    main.watchdog_tick(state, listener, t + main.STALL_RESTART_S - 1)  # quiet but within the limit
+    assert state.one("SELECT COUNT(*) FROM events WHERE kind='stall_restart'") == 0
+    listener.handle({**CREATE, "pool": "bonk", "mint": "B"}, t + 300)  # other launchpads do not count
+    with pytest.raises(main.StallError):
+        main.watchdog_tick(state, listener, t + main.STALL_RESTART_S + 1)
+    detail = state.one("SELECT detail FROM events WHERE kind='stall_restart'")
+    assert '"gap_s": 601.0' in detail
+
+
+def test_sd_notify_sends_to_the_systemd_socket(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import socket
+
+    from rugwatch.collector import main
+
+    monkeypatch.delenv("NOTIFY_SOCKET", raising=False)
+    assert main.sd_notify("WATCHDOG=1") is False
+    path = str(tmp_path / "notify.sock")
+    with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as server:
+        server.bind(path)
+        monkeypatch.setenv("NOTIFY_SOCKET", path)
+        assert main.sd_notify("WATCHDOG=1") is True
+        assert server.recv(64) == b"WATCHDOG=1"
+
+
+def test_record_stop_logs_the_systemd_reason(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from rugwatch.collector import main
+
+    monkeypatch.setenv("RUGWATCH_DATA_BASE", str(tmp_path))
+    monkeypatch.setenv("SERVICE_RESULT", "watchdog")
+    monkeypatch.setenv("EXIT_CODE", "killed")
+    monkeypatch.setenv("EXIT_STATUS", "ABRT")
+    cfg = make_cfg()
+    assert main.record_stop(cfg) == 0
+    state = State(tmp_path / cfg.storage.state)
+    assert '"service_result": "watchdog"' in state.one("SELECT detail FROM events WHERE kind='service_stop'")
+    state.close()
+    assert "service stops 10d: 1 watchdog/ABRT=1  stall_restarts 10d: 0" in "\n".join(report.status(cfg))

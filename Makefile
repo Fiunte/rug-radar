@@ -19,11 +19,12 @@ lint:
 check-env:        ## which variables are set (names only) and whether each RPC tier answers
 	$(PY) -m rugwatch.collector.main check-env
 
-install-service:  ## install + start the collector as a systemd user unit; survive logout and reboot
+install-service:  ## install or update + (re)start the collector systemd user unit; survives logout and reboot
 	mkdir -p $(UNIT_DIR)
 	sed 's|@REPO@|$(CURDIR)|g' deploy/$(UNIT) > $(UNIT_DIR)/$(UNIT)
 	systemctl --user daemon-reload
-	systemctl --user enable --now $(UNIT)
+	systemctl --user enable $(UNIT)
+	systemctl --user restart $(UNIT)
 	loginctl enable-linger $(USER)
 	@sleep 3; systemctl --user --no-pager status $(UNIT) | head -12
 

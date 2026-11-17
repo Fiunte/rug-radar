@@ -130,6 +130,16 @@ def status(cfg: Config) -> list[str]:
                      (now - 86400,)).fetchall()
     if bad:
         out.append("events 24h: " + "  ".join(f"{k}={n}" for k, n in bad))
+    stops = db.execute("SELECT detail FROM events WHERE kind='service_stop' AND ts>=?", (now - 864000,)).fetchall()
+    stalls = db.execute("SELECT COUNT(*) FROM events WHERE kind='stall_restart' AND ts>=?",
+                        (now - 864000,)).fetchone()[0]
+    reasons: dict[str, int] = {}
+    for (detail,) in stops:
+        d = _json(detail)
+        key = f"{d.get('service_result')}/{d.get('exit_status')}"
+        reasons[key] = reasons.get(key, 0) + 1
+    out.append(f"service stops 10d: {len(stops)} " + (" ".join(f"{k}={n}" for k, n in sorted(reasons.items())))
+               + f"  stall_restarts 10d: {stalls}")
     return out
 
 

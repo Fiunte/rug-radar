@@ -8,10 +8,16 @@ StartLimitIntervalSec=0
 Type=simple
 WorkingDirectory=@REPO@
 ExecStart=@REPO@/.venv/bin/python -m rugwatch.collector.main run
+# Logs every stop with its reason (watchdog kill, crash, stall exit, normal stop) for uptime.
+ExecStopPost=-@REPO@/.venv/bin/python -m rugwatch.collector.main record-stop
+# The collector pings every 5 s; a hung event loop is killed and restarted after 120 s.
+WatchdogSec=120
+NotifyAccess=main
 Environment=PYTHONUNBUFFERED=1
 Restart=always
 RestartSec=5
 # 75 = disk almost full, 78 = configuration error: restarting would not help.
+# 70 = stall watchdog (no launch for 600 s): restarted like a crash.
 RestartPreventExitStatus=75 78
 TimeoutStopSec=30
 
