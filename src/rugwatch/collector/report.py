@@ -14,6 +14,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from dotenv import load_dotenv
+
 from rugwatch.chain.pump_layout import LAMPORTS_PER_SOL, SOL_QUOTE_MINTS
 from rugwatch.collector.budget import METERED_SOURCE, cycle_start, hour_key
 from rugwatch.collector.main import billing_day, raw_root, state_path
@@ -353,6 +355,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="rugwatch-report")
     parser.add_argument("command", choices=["status", "day1", "week1"])
     args = parser.parse_args(argv)
+    load_dotenv(REPO_ROOT / ".env")  # only HELIUS_BILLING_DAY is read; no value is ever printed
     cfg = load_config()
     lines = {"status": status, "day1": report_day1, "week1": report_week1}[args.command](cfg)
     print("\n".join(lines))
