@@ -321,6 +321,16 @@ First 7.9 h (to 2026-11-17 10:41 UTC):
 - PumpPortal: 7 reconnects after 60 s of silence, 17 s disconnected in total (see D-28).
 - Clock: NTP offset -6.7 ms (D-21).
 
+After the second launch source (data clock start 2026-11-17 12:11:51 UTC):
+
+- On-demand coverage check, 12:12:30-12:30:30 UTC: 385 creates on chain, 385 seen (100.0%).
+  Public RPC alone: 100.0%. PumpPortal: 25.7%. The 3 unseen signatures were not creates.
+  385 creates in 18 min is about 31k/day.
+- First 24 min: public RPC 540 launches, PumpPortal 144. Public RPC is usually about 0.3 s earlier.
+  The public-RPC stream had no drops and no rate limiting. PumpPortal dropped once (12:13,
+  reconnected after 9.6 s).
+- Raw storage of the public-RPC stream: 0.3 MB in 24 min (about 19 MB/day).
+
 ## D. Open items
 
 - Launch discovery: resolved by D-31 (approved 2026-11-17); first coverage numbers in section C.
