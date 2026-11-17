@@ -2,6 +2,8 @@
 PY := .venv/bin/python
 UNIT := rugwatch-collector.service
 UNIT_DIR := $(HOME)/.config/systemd/user
+LAPTOP ?= rugwatch-laptop
+LAPTOP_REPO ?= rug-radar
 
 .PHONY: setup test lint install-service status report-day1 report-week1 check-env backup
 
@@ -37,6 +39,10 @@ report-day1:
 report-week1:
 	@$(PY) -m rugwatch.collector.report week1
 
-backup:           ## rsync data/ to the desktop: make backup DEST=user@desktop:/path/rug-radar-data/
-	@test -n "$(DEST)" || { echo "usage: make backup DEST=user@host:/path/"; exit 2; }
-	rsync -a --partial --info=stats1 data/ $(DEST)
+backup:           ## run on the DESKTOP: pull data/ from the laptop over SSH (LAPTOP = ssh host alias)
+	@test ! -f $(UNIT_DIR)/$(UNIT) || { echo "this is the collector laptop: run make backup on the desktop"; exit 2; }
+	ssh $(LAPTOP) 'cd $(LAPTOP_REPO) && .venv/bin/python -m rugwatch.collector.main snapshot-state'
+	mkdir -p data/raw data/state
+	rsync -a --partial --append-verify --info=stats1 $(LAPTOP):$(LAPTOP_REPO)/data/raw/ data/raw/
+	rsync -a --info=stats1 $(LAPTOP):$(LAPTOP_REPO)/data/state/backup/collector.sqlite data/state/collector.sqlite
+	@echo "backup done at $$(date -u +%FT%TZ); data/ holds $$(du -sh data | cut -f1)"

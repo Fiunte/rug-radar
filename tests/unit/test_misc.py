@@ -249,3 +249,17 @@ def test_record_stop_logs_the_systemd_reason(tmp_path: Path, monkeypatch: pytest
     assert '"service_result": "watchdog"' in state.one("SELECT detail FROM events WHERE kind='service_stop'")
     state.close()
     assert "service stops 10d: 1 watchdog/ABRT=1  stall_restarts 10d: 0" in "\n".join(report.status(cfg))
+
+
+def test_snapshot_state_copies_a_live_database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from rugwatch.collector import main
+
+    monkeypatch.setenv("RUGWATCH_DATA_BASE", str(tmp_path))
+    cfg = make_cfg()
+    live = State(tmp_path / cfg.storage.state)  # stays open, in WAL mode, like the collector
+    live.event("start", {})
+    assert main.snapshot_state(cfg) == 0
+    backup = State((tmp_path / cfg.storage.state).parent / "backup" / "collector.sqlite")
+    assert backup.one("SELECT kind FROM events") == "start"
+    backup.close()
+    live.close()

@@ -19,7 +19,7 @@ make install-service  # systemd user unit, starts now, survives logout and reboo
 make status           # uptime, last event age, credits, websocket drops, disk
 make report-day1      # after 24 h: launches/day, pass counts per threshold, credits
 make report-week1     # after 7 days: credits per tracked token, storage/day, fees, scanners
-make backup DEST=user@desktop:/path/   # rsync data/ to the desktop
+make backup        # on the DESKTOP: pull data/ from the laptop over SSH (docs/runbook.md)
 ```
 
 Environment variables (in `.env`, never committed): `HELIUS_API_KEY` (required), `ALCHEMY_API_KEY`

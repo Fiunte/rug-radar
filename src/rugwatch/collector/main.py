@@ -1,4 +1,4 @@
-"""Collector entrypoint: `python -m rugwatch.collector.main run | check-env | record-stop`."""
+"""Collector entrypoint: `python -m rugwatch.collector.main run | check-env | record-stop | snapshot-state`."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import logging
 import os
 import signal
 import socket
+import sqlite3
 import sys
 import time
 from pathlib import Path
@@ -194,6 +195,27 @@ def record_stop(cfg: Config) -> int:
     return 0
 
 
+def snapshot_state(cfg: Config) -> int:
+    """Consistent copy of the live SQLite state (online backup API) for `make backup` to pull:
+    rsync of a database that is being written could copy a torn file."""
+    src_path = state_path(cfg)
+    if not src_path.exists():
+        print("no state database yet")
+        return 0
+    dest = src_path.parent / "backup" / "collector.sqlite"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(".tmp")
+    src = sqlite3.connect(f"file:{src_path}?mode=ro", uri=True)
+    dst = sqlite3.connect(tmp)
+    with dst:
+        src.backup(dst)  # overwrites whatever a failed earlier run left in tmp
+    src.close()
+    dst.close()
+    os.replace(tmp, dest)
+    print(f"state snapshot: {dest.relative_to(data_base())}")
+    return 0
+
+
 async def check_env(cfg: Config) -> int:
     """Print which variables are set (names only, never values) and whether each RPC tier answers."""
     for name in (*REQUIRED_ENV, *OPTIONAL_ENV):
@@ -217,11 +239,13 @@ async def check_env(cfg: Config) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="rugwatch-collector")
-    parser.add_argument("command", choices=["run", "check-env", "record-stop"])
+    parser.add_argument("command", choices=["run", "check-env", "record-stop", "snapshot-state"])
     args = parser.parse_args(argv)
     load_dotenv(REPO_ROOT / ".env")
     setup_logging()
     cfg = load_config()
+    if args.command == "snapshot-state":
+        return snapshot_state(cfg)
     if args.command == "record-stop":
         return record_stop(cfg)
     if args.command == "check-env":
