@@ -1,0 +1,19 @@
+# systemd user unit. Installed by `make install-service` (@REPO@ is replaced by the repo path).
+# Runs without a login session once lingering is enabled: loginctl enable-linger <user>
+[Unit]
+Description=rugwatch collector (pump.fun launch log and polling; read-only, paper trading only)
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=@REPO@
+ExecStart=@REPO@/.venv/bin/python -m rugwatch.collector.main run
+Environment=PYTHONUNBUFFERED=1
+Restart=always
+RestartSec=5
+# 75 = disk almost full, 78 = configuration error: restarting would not help.
+RestartPreventExitStatus=75 78
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target
