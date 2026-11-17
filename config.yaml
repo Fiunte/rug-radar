@@ -1,0 +1,235 @@
+# config.yaml — single source for every threshold. Code must not hard-code any of these.
+# PLACEHOLDER = replace with the measured value during M1 (see HANDOFF.md section 5/6).
+# Times are seconds. "t" = seconds since the creation transaction's block time unless stated.
+schema_version: 1
+universe_version: 1          # bump if activity_filter changes after M1 freeze
+label_version: 1             # bump on any label threshold change
+seed: 17
+
+collector:
+  timezone: UTC
+  commitment: confirmed
+  pumpportal:
+    url: wss://pumpportal.fun/api/data
+    streams: [subscribeNewToken, subscribeMigration]   # free streams only; never trade streams
+    max_connections: 1
+    reconnect_backoff_s: [1, 2, 5, 15, 60]
+  rpc:
+    primary: helius
+    fallback: alchemy          # overflow only; public RPC = emergency only
+    max_rps: 8                 # Helius free = 10 rps
+    batch_accounts: 100        # getMultipleAccounts per call
+    use_websocket: false       # metered on Helius; do not use
+  budget:
+    monthly_credits: 1000000
+    target_credits: 800000
+    hard_stop_credits: 950000  # above: launch log + price ticks of already-tracked tokens only
+    throttle_order:            # applied in order when month projection > target
+      - balance_cadence_x2_after_3600s
+      - random_rest_per_day_50
+      - tracked_cap_minus_20pct
+    never_throttle: [launch_log, filter_ticks, snapshot_batch, price_ticks_first_3600s]
+
+activity_filter:
+  metric: real_sol_reserves    # SOL in curve, excluding virtual reserves
+  tick_s: [60, 180, 300]       # polled for every launched token
+  decide_at_s: 300
+  threshold_sol: 5.0           # PLACEHOLDER — set by rule 5.1
+  threshold_grid_sol: [4, 5, 7.5, 10, 15, 20, 30]
+  floor_sol: 4.0               # 0.5% of 4 SOL = min position size
+  freeze_after_day: 14
+
+tracking:
+  filter_pass_cap_per_day: 500
+  random_rest_per_day: 100     # tokens that failed the filter, for base rates
+  tracked_cap_per_day: 600     # PLACEHOLDER upper bound — recomputed by rule 5.1
+  sampling: hash               # accept if sha256(mint)[:8]/2^32 < cap / count_last_24h
+  snapshot_batch:
+    start_at_s: 300            # fired right after the 300 s filter tick passes
+    deadline_s: 45             # parts not back by then = null, snapshot_complete=false
+    parts: [signatures, early_trades, creator_history, largest_holders, balances, scanners, closing_reserve_read]
+    # snapshot_ts := observed_at of closing_reserve_read; P0 := price from that read
+  early_trades:
+    n: 20                      # oldest 20 successful trades on the curve
+    max_signature_pages: 3     # 1000 sigs/page; beyond = early_trades_truncated
+  early_buyers_tracked: 20     # distinct buyers; token accounts taken from postTokenBalances, never derived
+  creator_history:
+    max_signature_pages: 3
+    fetch_oldest_tx: true      # funder = source of first inbound SOL
+    cache_ttl_days: 7
+  insider_funding_link: false  # needs ~40 calls/token; enable only on paid tier
+  price_cadence:               # [until_s, every_s], from snapshot
+    - [900, 15]
+    - [3600, 30]
+    - [21600, 300]
+    - [87300, 1800]
+  balance_cadence:
+    - [3600, 60]
+    - [21600, 600]
+    - [87300, 3600]
+  largest_holders_at_s: [300, 1800]
+  dead_rule:                   # stops balance polling; price cadence drops to 1800 s
+    price_below_frac_of_peak: 0.05
+    no_reserve_change_s: 1800
+  graduation:
+    m1_m2: censor_at_graduation   # flag graduated_ts; keep curve record
+    m3: poll_pumpswap_pool        # second snapshot at migration added in M3
+
+scanners:
+  enabled: false               # switch on day 3
+  list: [rugcheck, goplus, solanatracker]
+  benchmark_tokens_per_day: 80 # Solana Tracker free = 2,500 req/month
+  eligible: filter_pass        # sampled by hash from filter-pass tracked tokens
+  query_at_s: 300              # inside snapshot batch
+  timeout_s: 25
+  one_shot: true               # never re-query or backfill a score
+  score_direction: higher_is_riskier   # normalise each scanner to this
+
+labels:
+  horizon_class_s: 86400       # from snapshot_ts
+  horizon_event_s: 3600
+  events:                      # cause-blind; used by models and simulator; never tuned by audit
+    collapse:
+      cross_frac_of_p0: 0.50   # first tick price <= 0.50*P0 ...
+      sustain_frac_of_p0: 0.60 # ... and every tick in next sustain_s <= 0.60*P0
+      sustain_s: 600
+    runup:
+      cross_frac_of_p0: 1.50
+    first_event_values: [collapse, runup, none]
+  insider_set:
+    include_creator: true
+    slot_window_after_creation: 1      # buyers with slot <= creation_slot + 1
+    direct_transfer_from_creator: true # seen inside the parsed early trades
+    funded_by_creator_or_funder: false # = tracking.insider_funding_link
+  classes:                     # evaluated in this order; first match wins
+    hard_rug:
+      insider_min_share_of_supply: 0.05
+      sold_frac_in_window: 0.50
+      window_s: 60
+      price_drop_frac: 0.60          # from pre-window price, within drop_within_s
+      drop_within_s: 300
+      no_recovery_above_frac: 0.50   # of pre-window price, for no_recovery_s
+      no_recovery_s: 1800
+    soft_rug:
+      insider_min_share_of_supply: 0.05
+      sold_frac_over_horizon: 0.80
+      min_separate_sell_polls: 3
+      final_price_below_peak_frac: 0.80   # final <= (1-0.80)*post-snapshot peak
+    died_organic:
+      final_price_below_peak_frac: 0.90
+      or_no_reserve_change_s: 3600
+    survived:
+      final_price_min_frac_of_p0: 0.50
+      reserve_change_within_s: 3600
+    fallback: indeterminate
+  transfer_vs_sale: reserves_moved_same_poll   # balance drop without curve reserve change = transfer, not sale
+  sensitivity_grid:
+    price_drop_frac: [0.5, 0.6, 0.7, 0.8, 0.9]
+    window_s: [30, 60, 120]
+    insider_min_share_of_supply: [0.03, 0.05, 0.10]
+    sold_frac: [0.4, 0.5, 0.6, 0.8]
+    horizon_s: [3600, 21600, 86400]
+    claim_holds_if_model_leads_in_frac_of_cells: 0.80
+  audit:
+    m1_sample: 50              # 10 per class, seed = seed
+    m5_sample: 100             # report only, no threshold changes
+    pass_overall: 0.85
+    pass_per_class: 0.70
+    max_adjustment_rounds: 1
+
+models:
+  split: walk_forward_by_launch_week   # ISO week, UTC, by snapshot_ts
+  min_train_weeks: 3
+  train_window: expanding
+  purge: drop_train_if_label_complete_at_ge_test_start
+  hazard:                      # claim model
+    library: lightgbm
+    interval_s: 60
+    n_intervals: 60
+    objective: multiclass      # none / collapse / runup per token-interval
+    covariates_v1: snapshot_features_plus_interval_index
+    covariates_v2: add_time_varying   # only after v1 scorecard exists
+    params: {num_leaves: 31, learning_rate: 0.05, n_estimators: 400, min_child_samples: 50}
+    early_stopping: inner_time_split_of_train_only
+  calibration: {method: isotonic, fit_on: last_train_week}   # model fit excludes that week
+  trade:                       # EV model
+    target: first_barrier      # target / stop / timeout, from simulator replay of strategy below
+    ev: sum_p_class_times_train_mean_net_return
+    ev_lower: {method: day_block_bootstrap_models, n_models: 20, quantile: 0.10}
+  baselines: [rugcheck, goplus, solanatracker, price_only]
+  headline:
+    target: first_event_60_is_collapse
+    score: cumulative_incidence_collapse_3600s
+    paired_tokens_only: true   # identical token set for model and each scanner
+    best_scanner: max_over_scanners_on_test   # ex-post max = conservative against us
+
+evaluation:
+  metrics: [pr_auc_pos, pr_auc_neg, base_rate, precision_at_recall, brier, ece]
+  precision_at_recall: [0.5, 0.8]
+  ece_bins: 10                 # equal-mass
+  bootstrap: {n: 2000, cluster: utc_day, ci: 0.95}
+  forbidden_headline: accuracy
+  lockbox: {launch_weeks: [11, 12, 13], evaluate_once_in: M5}
+  feature_freeze_end_of_week: 10
+
+costs:
+  fee_bps_per_side: 125        # PLACEHOLDER — measured per token from parsed trades in M1
+  fee_source: per_token_if_observed_else_default
+  slippage: constant_product_on_virtual_reserves_at_fill_tick
+  priority_fee_sol_per_tx: 0.0005   # PLACEHOLDER — measured in report-week1 (includes tip)
+  fill_delay_ticks: 1          # fill at the 2nd price tick with observed_at > signal_ts
+  entry_fail_prob: 0.10        # PLACEHOLDER; failed entry pays priority fee, no position, no retry
+  exit_extra_tick_prob: 0.10   # PLACEHOLDER
+  rng: sha256_mint_seed
+  stress: {fee_mult: 1.5, priority_mult: 1.5, extra_delay_ticks: 1}
+
+strategy:
+  candidates: filter_pass_tracked_with_snapshot_complete
+  entry_rule: ev_lower_gt_0
+  target_frac: 0.50            # vs spot price at entry fill tick; tuned on train weeks only
+  stop_frac: -0.35
+  timeout_s: 1800
+  size_sol: 0.05
+  max_frac_of_real_sol: 0.005
+  min_size_sol: 0.02           # below this, skip the trade
+  max_open_positions: 5
+  daily_stop_consecutive_losses: 10
+  hazard_exit: {enabled: false, window_s: 300, threshold: 0.5}   # enable only with covariates_v2
+  on_graduation_during_hold: exit_at_last_curve_price_flagged    # until M3 pool polling
+  rules_frozen: before_each_forward_week
+
+go_no_go:                      # all must hold; any failure = no-go
+  min_forward_weeks: 8
+  min_trades: 400
+  mean_net_return_gt: 0.0
+  ci95_lower_gt: 0.0           # day-clustered bootstrap
+  mean_without_top_frac: {drop: 0.01, gt: 0.0}
+  min_positive_weeks: 6
+  stress_mean_net_return_gt: 0.0
+  earliest_decision_week: 16
+  real_money: requires_explicit_user_go   # no keys, no signing code before that
+  kill_switch: {below_paper_ci_after_trades: 100, bankroll_drawdown: 0.5}
+
+review_loop:
+  active_weeks: [6, 10]
+  max_proposals_per_week: 3
+  preregister_file: experiments/log.jsonl
+  accept:
+    delta_pr_auc_min: 0.005        # headline target, paired, on the one new test week
+    prob_delta_gt_0_min: 0.90      # day-block bootstrap
+    ece_worsening_max: 0.01
+  retry_rejected_after_weeks: 4
+  misses_shown: 50                 # from weeks already used for a decision, never the pending week
+
+paid_data:
+  earliest_week: 10
+  monthly_cap_usd: 100
+  requires_user_approval: true
+  helius_developer_usd: 49
+  solanatracker_advanced_eur: 50
+
+storage:
+  raw: data/raw/{source}/{kind}/dt={YYYY-MM-DD}/part-{n}.jsonl.zst   # append-only, never edited
+  parsed: data/parquet/{table}/dt={YYYY-MM-DD}/*.parquet
+  state: data/state/collector.sqlite
+  backup: weekly_rsync_to_desktop
