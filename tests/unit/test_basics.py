@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import struct
 from pathlib import Path
@@ -21,6 +22,7 @@ from rugwatch.storage.raw import (
     iter_raw,
     make_record,
     parse_iso,
+    read_raw,
     utc_iso,
 )
 from tests.conftest import CREATOR, curve_bytes, make_cfg
@@ -123,6 +125,41 @@ def test_raw_writer_roundtrip_frames_parts_and_partitions(tmp_path: Path) -> Non
                         "latency_ms", "request", "payload", "collector_version"}
     assert rec["schema"] == 1
     assert set(dir_size_bytes(tmp_path)) == {"2026-11-17", "2026-11-18"}
+
+
+def test_raw_part_survives_a_crash_and_old_frame_files_still_read(tmp_path: Path) -> None:
+    import zstandard
+
+    w = RawWriter(tmp_path, min_free_bytes=0)
+    for i in range(50):
+        w.write(_rec(1794873600.0 + i, i))
+        w.flush()  # one flushed block per record, frame left open (no close = crash)
+    part = tmp_path / "helius" / "accounts" / "dt=2026-11-17" / "part-0.jsonl.zst"
+    assert [r["payload"]["n"] for r in read_raw(part)] == list(range(50))
+    with open(part, "ab") as fh:  # torn write after the last flushed block
+        fh.write(zstandard.ZstdCompressor().compressobj().compress(b"x" * 10))
+    assert len(list(read_raw(part))) == 50
+    # Files written by the earlier writer: many complete frames, concatenated.
+    old = tmp_path / "old.jsonl.zst"
+    cctx = zstandard.ZstdCompressor()
+    old.write_bytes(b"".join(cctx.compress(b'{"n":%d}\n' % i) for i in range(3)) + cctx.compress(b'{"n":3}\n')[:-4])
+    assert [r["n"] for r in read_raw(old)] == [0, 1, 2]
+
+
+def test_raw_stream_compresses_better_than_separate_frames(tmp_path: Path) -> None:
+    import zstandard
+
+    w = RawWriter(tmp_path, min_free_bytes=0)
+    lines = []
+    for i in range(200):
+        rec = _rec(1794873600.0 + i, i)
+        lines.append(json.dumps(rec, separators=(",", ":")).encode() + b"\n")
+        w.write(rec)
+        w.flush()
+    w.close()
+    stream_size = (tmp_path / "helius" / "accounts" / "dt=2026-11-17" / "part-0.jsonl.zst").stat().st_size
+    frames_size = sum(len(zstandard.ZstdCompressor(level=10).compress(x)) for x in lines)
+    assert stream_size < frames_size / 3
 
 
 def test_raw_writer_stops_when_disk_is_low(tmp_path: Path) -> None:
