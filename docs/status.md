@@ -1,71 +1,89 @@
 # Status (single source of truth for progress)
 
-Last updated: 2026-11-17 06:10 UTC (end of session 1).
+Last updated: 2026-11-17 11:45 UTC (end of session 2).
 
 ## Where we are
 
-- Milestone: **M1 collector** (weeks 1-2: 2026-11-17 to 2026-11-30).
-- The collector is **running** as systemd user unit `rugwatch-collector` since 2026-11-17 02:49 UTC
-  (enabled, lingering on: survives logout and reboot). Day 0 of the data clock.
+- Milestone: **M1 collector** (2026-11-17 to 2026-12-01). M1 is done only when the exit checks
+  below pass.
+- Collector running as systemd user unit `rugwatch-collector` since 2026-11-17 02:49 UTC.
+  Redeployed 10:56 UTC with the new raw writer, the stall watchdog and the systemd watchdog.
+- **Waiting for the user: launch discovery.** PumpPortal's free stream misses about 78% of
+  pump.fun launches (v1 transactions). The free fix changes section 0 and needs approval
+  (`docs/decisions.md`, section C and the first open item).
 - Next checkpoint: **2026-11-18 after 03:00 UTC** -> `make status` and `make report-day1`.
 
 ## Done
 
-- HANDOFF.md, config.yaml, CLAUDE.md committed and pushed (`9a52fc9`). M1 code committed and
-  pushed (`11c50ae`), 2026-11-17.
-- Scanner terms read; findings in `docs/decisions.md` section A.
-- M1 code: typed config, PumpPortal listener, RPC client (rate limit, fallback, 429 retry),
-  scheduler (filter ticks, tracking decision, price/balance/holder polls), snapshot batch, scanner
-  clients (disabled until day 3), budget/throttle, raw writer, status and reports, systemd unit,
-  Makefile targets (setup, test, lint, check-env, install-service, status, report-day1,
-  report-week1, backup).
-- 73 unit tests pass; ruff and mypy clean. Leakage tests come with M2.
-- Live check after 3.2 h: 1,519 launches logged, 87 tokens tracked, 87 of 87 snapshots complete,
-  0 websocket drops, 0 RPC errors. Numbers in `docs/decisions.md` section C.
+- Spec files and CLAUDE.md pushed (`9a52fc9`); M1 code pushed (`11c50ae`). Every working change is
+  now committed and pushed.
+- Session 2 (2026-11-17):
+  - D-13 accepted.
+  - Scanner policy: raw scores stay private; GoPlus permission email drafted.
+  - Disk growth analysed and the raw writer fixed (-29%, D-27).
+  - Wall-clock bug in a scheduler test fixed.
+  - Watchdogs added: stall restart after 600 s with no launch, systemd `WatchdogSec`, every
+    stop logged (D-26).
+  - PumpPortal silence timeout raised to 180 s (D-28).
+  - NTP offset shown in `make status` (-6.7 ms, so timesyncd is kept).
+  - `make backup` now pulls from the desktop (D-29).
+  - `docs/runbook.md` written: disk cleanup, reboot test, SSH, fixed IP, desktop, Claude Code.
+  - Entry-point question recorded (D-30).
+  - CLAUDE.md now has the version-control rule.
+- 80 unit tests pass; ruff and mypy clean.
+
+## M1 exit checks (HANDOFF section 6) and how they will be met
+
+| Check | How | Date |
+| --- | --- | --- |
+| Uptime >= 95% over 10 days | heartbeats + logged stops (`make status`) | first possible 2026-11-27 |
+| Helius projection <= 800,000/month | `make status`, `report-week1` | 2026-11-24 |
+| Labels v0 | `make parse` + `make labels` on the desktop | 2026-11-25 |
+| 50-token audit (rule 5.2) | `make audit-sheet` 11-25; user marks it; `make audit-score` 11-28; if it fails, one adjustment round and a fresh 50 by 12-01 | 2026-11-25 to 12-01 (days 8-14) |
+| Every PLACEHOLDER replaced | from `report-week1` | 2026-11-24 |
+| Scanner terms checked | done, section A (GoPlus permission pending) | done |
+| Backup working | desktop set up, first `make backup`, weekly task | by 2026-11-22 |
 
 ## Known problems and open decisions
 
-- **No working RPC fallback.** Alchemy: HTTP 403 "SOLANA_MAINNET is not enabled for this app".
-  FluxRPC: HTTP 401 "invalid api key". Helius alone is carrying everything.
-- **Disk: 6.4 GB free.** Raw data grows about 140 MB/day so far and is still rising. The collector
-  stops itself below 0.5 GB free.
-- **Spec deviation D-13 (user can veto):** early trades are read oldest-first with one Helius call,
-  because busy tokens have more than 3,000 signatures by minute 5 (31% of tracked tokens so far).
-  Switch: `EARLY_TRADES_ASCENDING` in `src/rugwatch/collector/snapshot.py`.
-- Launch rate in the first hours was about 0.13/s (about 11k/day pace), below the ~26k/day public
-  figure. Could be time of day; judge on the 24 h count in `report-day1`.
-- Credits are at about 1,140/hour and rising; the throttle steps will probably start within a day.
-  The tracked cap is recomputed on day 7 (rule 5.1.5).
-- Observed curve fee is 125 to 203 bps per side (mean 173), above the 125 bps placeholder.
-- Chrony is not installed; systemd-timesyncd keeps the clock (decision D-21).
+- **Launch coverage (needs the user's decision):** about 22% of launches reach us. See above.
+- **No working RPC fallback.** Alchemy: HTTP 403; FluxRPC: HTTP 401. Helius carries everything.
+- **Disk: 6.5 GB free.** Raw data grows about 80-100 MB/day after the fix; the main cost is the
+  signature pages set by `max_signature_pages: 3`. Full launch coverage would add only launch logs
+  and filter reads (a few MB/day), because the tracked tokens stay capped.
+- Credits: projection about 705k/30 d (target 800k); the throttle steps may start within days.
+- Observed curve fee 125-203 bps per side (mean 173), above the 125 bps placeholder.
 
 ## What the user needs to do
 
-1. Done: `git push origin main` (2026-11-17).
-2. Done: M1 code committed and pushed (`11c50ae`).
-3. Soon: Alchemy dashboard -> enable Solana Mainnet for the app. Re-check the FluxRPC key. Then
-   `make check-env` should show `ok` for both (no restart needed; the collector retries hourly).
-4. Soon: free disk space on the laptop (20 GB or more), and set up `make backup DEST=...` weekly.
-5. Helius dashboard: note the day of month the credits reset; add `HELIUS_BILLING_DAY=<day>` to
-   `.env`, then `systemctl --user restart rugwatch-collector`.
-6. **2026-11-18 after 03:00 UTC**: run `make status` and `make report-day1`, start a session and
-   paste both, plus the credit count shown on the Helius dashboard.
-7. **By 2026-11-20 (day 3)**: create the Solana Tracker account, add `SOLANATRACKER_API_KEY` to
-   `.env`. Say whether GoPlus gave a key only or a key plus secret.
-8. Read the scanner terms and decide whether to ask RugCheck / GoPlus / Solana Tracker for
-   permission to publish scores (decisions section A).
-9. Do not put the laptop to sleep or close it into suspend; leave it on power and network.
+1. **Now: decide on launch discovery.** Approve or refuse adding the public-RPC `logsSubscribe`
+   launch source (free; a change to section 0).
+2. **Now: send the GoPlus permission email** (draft in the session-2 answer).
+3. Soon: free disk space: `docs/runbook.md` step 1 (about 19.7 GB of safe deletions).
+4. Soon: Alchemy dashboard: enable Solana Mainnet; re-check the FluxRPC key; then `make check-env`.
+5. Helius dashboard: add `HELIUS_BILLING_DAY=<day>` to `.env`, then
+   `systemctl --user restart rugwatch-collector`.
+6. **By 2026-11-22:** runbook steps 3 and 4 (SSH, fixed IP, desktop, first backup, weekly task,
+   Claude Code), then step 2 (reboot test, checked from the desktop).
+7. **2026-11-18 after 03:00 UTC:** run `make status` and `make report-day1`; paste both, plus the
+   Helius dashboard credit count.
+8. **By 2026-11-20 (day 3):** Solana Tracker account; add `SOLANATRACKER_API_KEY` to `.env`.
+   Say whether GoPlus gave a key only or a key plus secret.
+9. Optional: allow `Bash(git push origin main)` in `/permissions` (runbook step 6).
+10. Keep the laptop on power and network; do not suspend it.
 
 ## Next steps (assistant)
 
-1. Day 1: apply rule 5.1 to `report-day1` (set `threshold_sol`); check missing parts, 429s,
-   throttle level, launch count against the public figure, credit ledger against the dashboard.
-2. Day 3: set `scanners.enabled`, verify the Solana Tracker response shape, measure scanner limits,
-   on-time coverage (rule: extend `deadline_s` to 60 once if below 80%) and Alchemy cost.
-3. Day 7 (2026-11-24): `make report-week1`; tracked cap by rule 5.1.5; replace PLACEHOLDER values
-   (`fee_bps_per_side`, `priority_fee_sol_per_tx`, `tracked_cap_per_day`).
-4. Day 14 (2026-12-01): freeze the universe. M1 exit checks (HANDOFF section 6).
-5. Then M2: `make parse`, labels, features with the as-of loader, the four leakage tests.
+1. If approved: build the second launch source, record per token which source saw it, and deploy.
+   The universe is not frozen yet, so `universe_version` stays.
+2. Day 1 (2026-11-18): rule 5.1 from `report-day1` (threshold); check credits against the
+   dashboard, 429s, throttle level and the launch count against the independent on-chain count.
+3. Day 3 (2026-11-20): scanners on; check the Solana Tracker response shape; scanner limits and
+   on-time coverage (extend `deadline_s` to 60 once if below 80%).
+4. Week 2 on the desktop: `make parse`, `make labels` (labels v0), `make audit-sheet`,
+   `make audit-score`.
+5. Day 7 (2026-11-24): `report-week1`; tracked cap by rule 5.1.5; replace the PLACEHOLDERs.
+6. Day 14 (2026-12-01): universe freeze; M1 exit checks; then M2.
 
 ## Checkpoints
 
@@ -73,6 +91,9 @@ Last updated: 2026-11-17 06:10 UTC (end of session 1).
 | --- | --- |
 | 2026-11-18 | report-day1, threshold by rule 5.1 |
 | 2026-11-20 | scanners on (needs the Solana Tracker key) |
+| 2026-11-22 | backup working, desktop set up, reboot test done |
 | 2026-11-24 | report-week1, tracked cap, placeholders |
+| 2026-11-25 | labels v0, audit sheet out |
 | 2026-11-27 | earliest 10-day uptime check (>= 95%) |
+| 2026-11-28 | audit scored (rule 5.2) |
 | 2026-12-01 | universe freeze, M1 exit |

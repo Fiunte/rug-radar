@@ -43,6 +43,20 @@ the older version is at https://docs.gopluslabs.io/reference/api-license-agreeme
 - To do (user): ask GoPlus for permission (research benchmark, storage, publication); credit
   "Powered by GoPlus" in the write-up.
 
+**User decision (2026-11-17):** aggregates such as PR-AUC are enough for the public claim, so raw
+scores of all three scanners stay private.
+
+**GoPlus plan (recommended 2026-11-17, to protect the benchmark):** ask GoPlus for written
+permission now (email drafted for the user), and keep GoPlus in the private analysis from day 3
+while waiting. Reasons:
+- Dropping GoPlus changes the claim sentence (section 0) and weakens "best of three".
+- Collecting without asking risks GoPlus ending access mid-study under §6, which would leave holes
+  in the paired benchmark weeks.
+- Asking first costs nothing.
+
+If GoPlus refuses, stop querying it and ask the user before changing the claim sentence. Credit
+"Powered by GoPlus" in the write-up either way.
+
 **Solana Tracker** — https://www.solanatracker.io/terms (last updated 2026-03-23),
 https://docs.solanatracker.io/pricing.md
 - §6.4: "Redistribution, resale, or sublicensing of raw API data is prohibited without prior written
@@ -110,7 +124,7 @@ https://docs.solanatracker.io/pricing.md
   transaction + the oldest 20 successful signatures found in the pages, and `early_trades` is marked
   missing when the pages are truncated. The 3 signature pages are still fetched for `sig_stats`
   (`sigs_truncated` is reported in the snapshot summary). Switch: `EARLY_TRADES_ASCENDING` in
-  `collector/snapshot.py`. No config value was changed.
+  `collector/snapshot.py`. No config value was changed. **Accepted by the user on 2026-11-17.**
 - **D-14 Early-trade rows and tracked accounts.** Rows = the first 20 TradeEvents of the mint in
   those transactions. The trader is the event's `user`, not the fee payer (they differ for agent
   trades). Creator set = the curve's `creator` field plus the launching wallet. Token accounts come
@@ -133,8 +147,9 @@ https://docs.solanatracker.io/pricing.md
   1800 s, recomputed at every price tick (a token can come back). A graduated curve is treated the
   same way. Dead stops balance polling at once; the price cadence drops to the slowest interval of
   `price_cadence` (1800 s) only after the first 3600 s (`never_throttle: price_ticks_first_3600s`).
-- **D-18 Raw writer.** Records are buffered and appended as complete zstd frames every 15 s (or
-  4 MB); a new part file per process start and per 256 MB. The collector stops (exit 75, no restart
+- **D-18 Raw writer.** Records are buffered and flushed to disk every 15 s (or 4 MB). Since
+  2026-11-17 each part is one zstd stream flushed in blocks (D-27). A new part file is started per
+  process start and per 256 MB. The collector stops (exit 75, no restart
   loop) when free disk space falls below 500 MB.
 - **D-19 RPC.** `getTransaction` uses `jsonParsed` and `maxSupportedTransactionVersion: 1` (version-1
   transactions exist on mainnet; 0 is rejected). A 429 is retried on the same provider after 1 s and
@@ -144,10 +159,13 @@ https://docs.solanatracker.io/pricing.md
   unauthenticated public RPC as the third provider (Helius -> Alchemy -> FluxRPC), used when both
   others fail. It cannot be primary or the overflow tier without changing `config.yaml`
   (`rpc.primary: helius`, `rpc.fallback: alchemy`). Endpoint `https://eu.fluxrpc.com?key=...`.
-  Status on 2026-11-17: the key in `.env` is rejected (HTTP 401 "invalid api key").
+  Status on 2026-11-17: the key in `.env` is rejected (HTTP 401 "invalid api key"). User decision
+  (2026-11-17): if it still fails after the user re-checks the key, remove FluxRPC.
 - **D-21 Clock.** The laptop is synced by systemd-timesyncd, not chrony (HANDOFF 6 item 11). It is
   accurate enough for second-level timestamps and needs no sudo; `make status` shows the sync flag
   and the reports show observed-minus-block-time. Installing chrony stays an option.
+  Measured 2026-11-17: offset -6.7 ms, jitter 4.3 ms (ntp.ubuntu.com, stratum 2), about 300 times
+  inside the 2 s limit, so timesyncd is kept. `make status` now shows the offset and alerts above 2 s.
 - **D-22 GoPlus authentication.** M1 uses GoPlus's public tier without a key. `GOPLUS_API_KEY` is
   not read yet: GoPlus access tokens need an app key and a secret. Decide on day 3 from the measured
   rate limit whether authentication is needed.
@@ -158,6 +176,30 @@ https://docs.solanatracker.io/pricing.md
 - **D-25 Insider funding link** stays off (section 0). Creator history (3 signature pages + oldest
   transaction, cached 7 days) is still collected; the oldest transaction is skipped when the pages
   are truncated, because it would not be the first one.
+- **D-26 Stall watchdog (asked by the user).** If no pump.fun launch arrives for 600 s, the
+  collector writes a `stall_restart` event and exits with code 70; systemd (`Restart=always`)
+  starts it again 5 s later. Threshold: day-1 launch gaps had p99.9 = 70 s and max = 112 s, so
+  600 s is about 5x the longest gap ever seen and should never fire on a quiet but healthy stream.
+  Also: `WatchdogSec=120` (the collector pings systemd every 5 s, so a hung event loop is killed and
+  restarted), and `ExecStopPost` runs `record-stop`, logging every stop with systemd's reason
+  (`success`, `exit-code`, `watchdog`, `signal`). `make status` counts stops and stall restarts over
+  10 days; uptime comes from the per-minute heartbeats.
+- **D-27 Raw compression.** One zstd stream per part file, flushed with `FLUSH_BLOCK` every 15 s,
+  and the frame finished on close, rotation or date change. The previous writer made each 15 s
+  flush its own frame, so records never shared compression context. Replaying the first 7.9 h:
+  38.0 MB -> 26.9 MB (-29%). Level 6 instead of 10: level 10 is only 2% smaller and needs more
+  memory per open stream. Crash safety is unchanged: the reader returns everything up to the last
+  flushed block and skips a torn last line.
+- **D-28 PumpPortal silence timeout 60 s -> 180 s.** Natural gaps between messages reached 112 s on
+  day 1. The 60 s timeout caused 7 reconnects in 3 h; after each, the next message took 5-52 s, so
+  the connection had not been dead. Dead TCP connections are still caught by websocket pings
+  (20 s interval, 20 s timeout).
+- **D-29 Backup direction.** `make backup` runs on the desktop and pulls over SSH (the user's
+  request). It first takes an SQLite online-backup copy of the state database on the laptop
+  (`snapshot-state`), then rsyncs `data/raw/` with `--append-verify`, which is safe because raw files
+  are append-only. It never deletes on either side and refuses to run on the collector laptop.
+- **D-30 Entry point (HANDOFF section 0 open question).** User decision 2026-11-17: keep the
+  default. The 5-minute snapshot is used now, and the graduation snapshot is added in M3.
 
 ## C. M1 measurements so far (2026-11-17, trial runs of ~10 minutes)
 
@@ -183,7 +225,38 @@ First 3.2 h of the live service (2026-11-17 02:49 to 06:01 UTC; not yet a full d
 - Storage: 18.7 MB in 3.2 h (signature pages 55%), about 140 MB/day and rising.
 - Early-buyer accounts: 701 tracked, 267 flagged insider (bought within one slot of creation).
 
+First 7.9 h (to 2026-11-17 10:41 UTC):
+
+- **Storage**: 38.0 MB (about 115 MB/day). By kind: signature pages 19.7 MB (52%; each page holds
+  up to 1,000 base58 signatures, which barely compress, ratio 3.6), account reads 11.2 MB,
+  transactions 4.4 MB, PumpPortal 1.5 MB. Account reads compressed badly only because of the small
+  frames, which D-27 fixes. Signature pages are fixed by `max_signature_pages: 3` (snapshot and
+  creator history) and stay. Expected after D-27: about 80-100 MB/day, i.e. about 12 GB over the
+  project's 17 weeks. The plan's ~20 MB/day estimate did not allow for 1,000-signature pages on
+  busy curves.
+- **Launch coverage (HANDOFF 6 item 3): PumpPortal's free stream delivers only about 22% of
+  pump.fun launches.** Independent count, 10:39-11:37 UTC: 1,128 successful transactions touching
+  the pump.fun mint authority (`TSLvdd1pWpHVjahSpsvCXUbgwsL3JAcvokwaKt1eokM`), about 27k/day, which
+  matches the public figure. PumpPortal delivered 253, all of which were among them. In a sample of
+  the missed ones, 13 of 14 were `CreateV2` launches in **version-1 transactions** (the 14th was a
+  PumpSwap `CreatePool`). Every delivered launch was a v0 transaction. PumpPortal's free stream
+  appears to skip v1 transactions, so the current universe is a biased subset of launches. The
+  10-minute trials before the service started saw ~0.3 launches/s, so this probably began recently.
+  A free fix was tested: the public Solana RPC websocket, `logsSubscribe` mentioning the mint
+  authority, delivered 25 creates in 75 s, each with the full CreateEvent (mint, bonding curve,
+  creator, quote mint, token program) in its logs, at 0 credits. Using it changes the section 0
+  data-access rule, so it waits for the user's decision (open item below).
+- PumpPortal: 7 reconnects after 60 s of silence, 17 s disconnected in total (see D-28).
+- Clock: NTP offset -6.7 ms (D-21).
+
 ## D. Open items
+
+- **Waiting for the user: launch discovery.** PumpPortal misses about 78% of launches (section C).
+  Recommended fix: add the public-RPC `logsSubscribe` launch source next to PumpPortal (free, one
+  more websocket, no trade stream, not Helius), merge both by mint, and record per token which
+  source saw it first. This changes section 0, so it needs the user's approval. Until then the
+  universe is "launches PumpPortal reports". It is not frozen until day 14, but every day collected
+  before the fix is a biased sample.
 
 - Day 3: measure RugCheck / GoPlus limits and on-time coverage; verify the Solana Tracker response
   shape; record Alchemy cost per method once the network is enabled.
