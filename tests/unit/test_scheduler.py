@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -161,7 +162,9 @@ def test_filter_ticks_decision_and_snapshot_start(env_factory: Callable[..., Env
 
     env = env_factory(handler)
     sched, snaps = make_scheduler(env)
-    _seed_decisions(env, n_pass=0, n_rest=30000, start=T0 - 86400)  # so random-rest sampling is ~0.3%
+    # Decisions are stamped with the RPC response time (the real clock), so the history must be
+    # recent relative to the real clock: random-rest sampling is then ~0.1%.
+    _seed_decisions(env, n_pass=0, n_rest=30000, start=time.time() - 30000)
     _launch(env, "mintRich", T0, "rich")
     _launch(env, "mintPoor", T0, "poor")
     _launch(env, "mintGone", T0, "gone")
