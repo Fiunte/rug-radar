@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -38,6 +39,17 @@ def _cmd(*args: str) -> str:
         return subprocess.run(args, capture_output=True, text=True, timeout=10, check=False).stdout.strip()
     except (OSError, subprocess.TimeoutExpired):
         return "unknown"
+
+
+CLOCK_ALERT_S = 2.0  # HANDOFF 6 item 11
+
+
+def ntp_offset_s(text: str) -> float | None:
+    """Clock offset from `timedatectl timesync-status` output ("Offset: -6.745ms"), in seconds."""
+    m = re.search(r"Offset:\s*([+-]?[\d.]+)\s*(us|ms|s)\b", text)
+    if not m:
+        return None
+    return float(m.group(1)) * {"us": 1e-6, "ms": 1e-3, "s": 1.0}[m.group(2)]
 
 
 def _day(ts: float) -> str:
@@ -87,7 +99,11 @@ def status(cfg: Config) -> list[str]:
     out.append(f"service: active={_cmd('systemctl', '--user', 'is-active', SERVICE) or 'unknown'} "
                f"enabled={_cmd('systemctl', '--user', 'is-enabled', SERVICE) or 'unknown'} "
                f"linger={_cmd('loginctl', 'show-user', str(Path.home().name), '-p', 'Linger', '--value') or 'unknown'}")
-    out.append(f"clock: ntp_synchronized={_cmd('timedatectl', 'show', '-p', 'NTPSynchronized', '--value')}")
+    offset = ntp_offset_s(_cmd("timedatectl", "timesync-status"))
+    out.append(f"clock: ntp_synchronized={_cmd('timedatectl', 'show', '-p', 'NTPSynchronized', '--value')}  "
+               f"offset={'unknown' if offset is None else f'{offset * 1000:+.1f} ms'}"
+               + ("   <-- ALERT: clock off by more than 2 s" if offset is not None and abs(offset) > CLOCK_ALERT_S
+                  else ""))
     free = shutil.disk_usage(REPO_ROOT).free
     raw_bytes = sum(dir_size_bytes(raw_root(cfg)).values()) if raw_root(cfg).exists() else 0
     out.append(f"disk: free={free / 1e9:.1f} GB  raw_data={raw_bytes / 1e6:.1f} MB"

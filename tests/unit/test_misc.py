@@ -133,6 +133,12 @@ def test_state_prune_keeps_tracked_tokens_and_recent_rows() -> None:
 
 
 # ------------------------------------------------------------------ reports
+def test_ntp_offset_parse() -> None:
+    assert report.ntp_offset_s("       Offset: -6.745ms\n") == pytest.approx(-0.006745)
+    assert report.ntp_offset_s("Offset: +2.5s") == 2.5 and report.ntp_offset_s("Offset: 120us") == pytest.approx(1.2e-4)
+    assert report.ntp_offset_s("no sync") is None
+
+
 def test_quantiles() -> None:
     q = report.quantiles([float(i) for i in range(1, 101)])
     assert q["p50"] == 51.0 and q["p99"] == 100.0
