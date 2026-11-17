@@ -126,7 +126,7 @@ def status(cfg: Config) -> list[str]:
                        f"publicrpc_connected={up[2]:.1%}")
     last_launch = db.execute("SELECT MAX(launch_obs) FROM tokens").fetchone()[0]
     out.append(f"last heartbeat age: {now - beat * 60:.0f} s" if beat else "last heartbeat: never")
-    out.append(f"last launch event age: {now - last_launch:.0f} s" if last_launch else "last launch event: never")
+    out.append(f"last launch event age: {max(0.0, now - last_launch):.0f} s" if last_launch else "last launch event: never")
     bday = billing_day()
     used = db.execute("SELECT COALESCE(SUM(credits),0) FROM credit_ledger WHERE source=? AND hour>=?",
                       (METERED_SOURCE, hour_key(cycle_start(now, bday)))).fetchone()[0]
