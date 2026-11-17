@@ -19,6 +19,12 @@ log = logging.getLogger("rugwatch.pumpportal")
 STALE_AFTER_S = 180.0  # no message for this long = reconnect (D-28; natural silences reach ~110 s)
 ALLOWED_STREAMS = frozenset({"subscribeNewToken", "subscribeMigration"})
 PUMP_POOL = "pump"
+SOURCE = "pumpportal"
+LAUNCH_STALL_S = 300.0  # connected but no pump.fun launch for this long: reconnect this source (D-31)
+
+
+class LaunchStall(Exception):
+    """A launch source is connected but has delivered no launch for LAUNCH_STALL_S."""
 
 
 def classify(msg: dict[str, Any]) -> str:
@@ -43,6 +49,7 @@ class PumpPortalListener:
         self.connected = False
         self.last_message_at: float | None = None
         self.last_launch_at = time.time()  # last pump.fun launch (stall watchdog, D-26)
+        self._connected_at = time.time()
         self._dropped_at: float | None = None
 
     def handle(self, msg: dict[str, Any], observed_at: float) -> str:
@@ -57,6 +64,7 @@ class PumpPortalListener:
         if kind == "create" and isinstance(mint, str):
             self.last_launch_at = max(self.last_launch_at, observed_at)
             self.state.add_token(mint, observed_at, msg, observed_at + self.first_tick_s)
+            self.state.add_launch_source(mint, SOURCE, observed_at, msg.get("signature"))
         elif kind == "migrate" and isinstance(mint, str):
             self.state.x("UPDATE tracking SET graduated_ts=COALESCE(graduated_ts,?) WHERE mint=?",
                          (observed_at, mint))
@@ -75,9 +83,12 @@ class PumpPortalListener:
                     self.state.event("ws_connect", {"gap_s": round(gap, 1) if gap else None})
                     log.info("pumpportal connected (gap %s s)", f"{gap:.1f}" if gap else "-")
                     self.connected = True
+                    self._connected_at = now
                     while True:
                         raw = await asyncio.wait_for(ws.recv(), STALE_AFTER_S)
                         observed_at = time.time()
+                        if observed_at - max(self.last_launch_at, self._connected_at) > LAUNCH_STALL_S:
+                            raise LaunchStall
                         try:
                             msg = json.loads(raw)
                         except ValueError:
@@ -89,7 +100,8 @@ class PumpPortalListener:
             except (asyncio.CancelledError, DiskFullError):
                 raise
             except Exception as exc:
-                reason = "stale" if isinstance(exc, TimeoutError) else type(exc).__name__
+                reason = ("stale" if isinstance(exc, TimeoutError) else "no_launches"
+                          if isinstance(exc, LaunchStall) else type(exc).__name__)
                 if self.connected or self._dropped_at is None:
                     self._dropped_at = time.time()
                     self.state.event("ws_drop", {"reason": reason})

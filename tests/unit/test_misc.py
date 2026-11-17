@@ -212,11 +212,15 @@ def test_stall_watchdog_logs_and_raises(tmp_path: Path) -> None:
                                   RawWriter(tmp_path, min_free_bytes=0))
     t = time.time()
     listener.handle(CREATE, t)
-    main.watchdog_tick(state, listener, t + main.STALL_RESTART_S - 1)  # quiet but within the limit
+    other = PumpPortalListener(cfg.collector.pumpportal, cfg.activity_filter, state,
+                               RawWriter(tmp_path / "o", min_free_bytes=0))
+    other.last_launch_at = t - 5000  # a second source that has been silent for long
+    sources = {"pumpportal": listener, "publicrpc": other}
+    main.watchdog_tick(state, sources, t + main.STALL_RESTART_S - 1)  # quiet but within the limit
     assert state.one("SELECT COUNT(*) FROM events WHERE kind='stall_restart'") == 0
     listener.handle({**CREATE, "pool": "bonk", "mint": "B"}, t + 300)  # other launchpads do not count
     with pytest.raises(main.StallError):
-        main.watchdog_tick(state, listener, t + main.STALL_RESTART_S + 1)
+        main.watchdog_tick(state, sources, t + main.STALL_RESTART_S + 1)
     detail = state.one("SELECT detail FROM events WHERE kind='stall_restart'")
     assert '"gap_s": 601.0' in detail
 

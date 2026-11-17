@@ -114,9 +114,13 @@ class Scheduler:
         """Estimated count per 24 h, extrapolated while the collector has less than a day of data."""
         cached = self._rate_cache.get(column)
         if cached is None or not 0 <= now - cached[0] < RATE_CACHE_S:
-            count = self.state.count_decided(now - 86400, column) + 1  # + the token being decided
+            # Counts restart with the data clock (D-32): before it, only ~22% of launches were seen, so
+            # mixing in that period would overstate every sampling probability for a day.
+            clock = self.state.data_clock_start() or 0.0
+            count = self.state.count_decided(max(now - 86400, clock), column) + 1  # + the token being decided
             first = self.state.first_decision_ts()
-            elapsed = 86400.0 if first is None else min(86400.0, max(now - first, MIN_RATE_WINDOW_S))
+            start = None if first is None else max(first, clock)
+            elapsed = 86400.0 if start is None else min(86400.0, max(now - start, MIN_RATE_WINDOW_S))
             cached = (now, count * 86400.0 / elapsed)
             self._rate_cache[column] = cached
         return cached[1]

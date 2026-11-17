@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 
 from rugwatch.chain.pump_layout import LAMPORTS_PER_SOL, SOL_QUOTE_MINTS
 from rugwatch.collector.budget import METERED_SOURCE, cycle_start, hour_key
+from rugwatch.collector.coverage import COVERAGE_ALERT
 from rugwatch.collector.main import billing_day, raw_root, state_path
 from rugwatch.config import REPO_ROOT, Config, load_config
 from rugwatch.storage.raw import dir_size_bytes
@@ -69,16 +70,18 @@ def _fmt_q(q: dict[str, float], scale: float = 1.0, digits: int = 1) -> str:
     return "  ".join(f"{k}={v * scale:.{digits}f}" for k, v in q.items()) if q else "no data"
 
 
-def uptime(db: sqlite3.Connection, now: float, window_s: float) -> tuple[float, float] | None:
-    """(share of minutes alive, share of minutes with the websocket connected) over the window."""
+def uptime(db: sqlite3.Connection, now: float, window_s: float) -> tuple[float, float, float] | None:
+    """Shares of minutes over the window: alive, PumpPortal connected, public-RPC stream connected."""
     first = db.execute("SELECT MIN(minute) FROM heartbeats").fetchone()[0]
     if first is None:
         return None
     start = max(first, int((now - window_s) // 60))
     total = int(now // 60) - start + 1
-    alive, ws = db.execute("SELECT COUNT(*), COALESCE(SUM(ws_connected),0) FROM heartbeats WHERE minute>=?",
-                           (start,)).fetchone()
-    return alive / total, ws / total
+    cols = {r[1] for r in db.execute("PRAGMA table_info(heartbeats)")}
+    rpc_col = "COALESCE(SUM(rpcws_connected),0)" if "rpcws_connected" in cols else "0"
+    alive, ws, rpcws = db.execute(f"SELECT COUNT(*), COALESCE(SUM(ws_connected),0), {rpc_col} FROM heartbeats "
+                                  "WHERE minute>=?", (start,)).fetchone()
+    return alive / total, ws / total, rpcws / total
 
 
 def projection(db: sqlite3.Connection, now: float) -> float | None:
@@ -117,7 +120,8 @@ def status(cfg: Config) -> list[str]:
     for label, window in (("24h", 86400.0), ("10d", 864000.0)):
         up = uptime(db, now, window)
         if up:
-            out.append(f"uptime {label}: alive={up[0]:.1%}  websocket_connected={up[1]:.1%}")
+            out.append(f"uptime {label}: alive={up[0]:.1%}  pumpportal_connected={up[1]:.1%}  "
+                       f"publicrpc_connected={up[2]:.1%}")
     last_launch = db.execute("SELECT MAX(launch_obs) FROM tokens").fetchone()[0]
     out.append(f"last heartbeat age: {now - beat * 60:.0f} s" if beat else "last heartbeat: never")
     out.append(f"last launch event age: {now - last_launch:.0f} s" if last_launch else "last launch event: never")
@@ -138,6 +142,7 @@ def status(cfg: Config) -> list[str]:
     gap = db.execute("SELECT detail FROM events WHERE kind='ws_connect' AND ts>=?", (now - 86400,)).fetchall()
     gap_s = sum(float(_json(g[0]).get("gap_s") or 0) for g in gap)
     out.append(f"websocket drops: total={drops}  last_24h={drops24}  disconnected_24h={gap_s:.0f} s")
+    out.extend(launch_source_lines(db, now))
     row = db.execute("SELECT COUNT(*), COALESCE(SUM(tracked),0), COALESCE(SUM(snapshot_complete),0), "
                      "COALESCE(SUM(filter_pass),0) FROM tracking WHERE decided_at>=?", (now - 86400,)).fetchone()
     launches = db.execute("SELECT COUNT(*) FROM tokens WHERE launch_obs>=?", (now - 86400,)).fetchone()[0]
@@ -161,6 +166,35 @@ def status(cfg: Config) -> list[str]:
     return out
 
 
+def launch_source_lines(db: sqlite3.Connection, now: float) -> list[str]:
+    """Public-RPC launch stream health and the latest launch-coverage check (D-31)."""
+    def count(kind: str, since: float) -> int:
+        return int(db.execute("SELECT COUNT(*) FROM events WHERE kind=? AND ts>=?", (kind, since)).fetchone()[0])
+
+    gaps = db.execute("SELECT detail FROM events WHERE kind='rpcws_connect' AND ts>=?", (now - 86400,)).fetchall()
+    gap_s = sum(float(_json(g[0]).get("gap_s") or 0) for g in gaps)
+    limited = count("rpcws_rate_limited", now - 86400)
+    out = [f"public rpc launch stream drops: total={count('rpcws_drop', 0)}  "
+           f"last_24h={count('rpcws_drop', now - 86400)}  disconnected_24h={gap_s:.0f} s  rate_limited_24h={limited}"
+           + ("   <-- ALERT: the public RPC is rate-limiting us (see decisions D-31 fallback)" if limited else "")]
+    row = db.execute("SELECT ts, detail FROM events WHERE kind='coverage_check' ORDER BY ts DESC LIMIT 1").fetchone()
+    if row is None:
+        out.append("launch coverage: no check yet (first one about 65 min after the public-RPC stream starts)")
+        return out
+    d = _json(row[1])
+    cov = d.get("coverage")
+    by_src = "  ".join(f"{k}={v:.1%}" for k, v in (d.get("by_source") or {}).items() if v is not None)
+    minutes = (float(d.get("window_end", 0)) - float(d.get("window_start", 0))) / 60
+    out.append(f"launch coverage (check {datetime.fromtimestamp(row[0], UTC):%m-%d %H:%M} UTC, {minutes:.0f} min "
+               f"window, ~{d.get('chain_creates_est')} creates on chain): all={'n/a' if cov is None else f'{cov:.1%}'}"
+               f"  {by_src}"
+               + (f"   <-- ALERT: below {COVERAGE_ALERT:.0%}" if cov is not None and cov < COVERAGE_ALERT else ""))
+    errors = count("coverage_error", now - 86400)
+    if errors:
+        out.append(f"coverage check errors 24h: {errors}")
+    return out
+
+
 def _json(text: str | None) -> dict[str, Any]:
     import json
 
@@ -180,7 +214,13 @@ def report_day1(cfg: Config) -> list[str]:
     now = time.time()
     sol = ",".join(f"'{m}'" for m in sorted(SOL_QUOTE_MINTS))
     out = ["# report-day1", f"generated {datetime.fromtimestamp(now, UTC):%Y-%m-%d %H:%M} UTC", ""]
-    span = db.execute("SELECT MIN(launch_obs), MAX(launch_obs), COUNT(*) FROM tokens").fetchone()
+    meta = db.execute("SELECT value FROM meta WHERE key='data_clock_start'").fetchone()
+    clock = float(meta[0]) if meta else 0.0  # D-32: only launches observed after the data clock start
+    if clock:
+        out += [f"Data clock start: {datetime.fromtimestamp(clock, UTC):%Y-%m-%d %H:%M} UTC (both launch sources). "
+                "Launches observed earlier are pre-fix data and are excluded below.", ""]
+    span = db.execute("SELECT MIN(launch_obs), MAX(launch_obs), COUNT(*) FROM tokens WHERE launch_obs>=?",
+                      (clock,)).fetchone()
     if span[2] == 0:
         return [*out, "no launches recorded yet"]
     hours = max((span[1] - span[0]) / 3600, 1e-9)
@@ -199,8 +239,8 @@ def report_day1(cfg: Config) -> list[str]:
         for tick in flt.tick_s:
             n = db.execute(
                 f"SELECT COUNT(*) FROM filter_ticks f JOIN tokens t USING(mint) WHERE f.tick_s=? AND f.status='ok' "
-                f"AND f.complete=0 AND f.real_sol>=? AND (t.quote_mint IS NULL OR t.quote_mint IN ({sol}))",
-                (tick, thr * LAMPORTS_PER_SOL)).fetchone()[0]
+                f"AND f.complete=0 AND f.real_sol>=? AND (t.quote_mint IS NULL OR t.quote_mint IN ({sol})) "
+                f"AND t.launch_obs>=?", (tick, thr * LAMPORTS_PER_SOL, clock)).fetchone()[0]
             cells.append(f"{n * scale:,.0f}")
             if tick == flt.decide_at_s:
                 pass_300[thr] = n * scale
@@ -220,7 +260,8 @@ def report_day1(cfg: Config) -> list[str]:
                    "the timeline to enough data roughly doubles.")
 
     d = flt.decide_at_s
-    tot = db.execute("SELECT COUNT(*) FROM filter_ticks WHERE tick_s=?", (d,)).fetchone()[0]
+    tot = db.execute("SELECT COUNT(*) FROM filter_ticks f JOIN tokens t USING(mint) WHERE f.tick_s=? "
+                     "AND t.launch_obs>=?", (d, clock)).fetchone()[0]
     out += ["", f"## Outcome of the {d} s tick (share of launches that reached it: n={tot:,})", ""]
     if tot:
         rows = {
@@ -237,21 +278,23 @@ def report_day1(cfg: Config) -> list[str]:
         }
         for label, cond in rows.items():
             n = db.execute(f"SELECT COUNT(*) FROM filter_ticks f JOIN tokens t USING(mint) "
-                           f"WHERE f.tick_s=? AND {cond}", (d,)).fetchone()[0]
+                           f"WHERE f.tick_s=? AND t.launch_obs>=? AND {cond}", (d, clock)).fetchone()[0]
             out.append(f"- {label}: {n:,} ({n / tot:.1%})")
-    trk = db.execute("SELECT reason, COUNT(*) FROM tracking WHERE tracked=1 GROUP BY reason").fetchall()
-    snap = db.execute("SELECT COUNT(*), COALESCE(SUM(snapshot_complete),0) FROM tracking WHERE tracked=1").fetchone()
+    trk = db.execute("SELECT reason, COUNT(*) FROM tracking WHERE tracked=1 AND launch_obs>=? GROUP BY reason",
+                     (clock,)).fetchall()
+    snap = db.execute("SELECT COUNT(*), COALESCE(SUM(snapshot_complete),0) FROM tracking WHERE tracked=1 "
+                      "AND launch_obs>=?", (clock,)).fetchone()
     out += ["", "## Tracking", "",
             "- tracked: " + ("  ".join(f"{r}={n:,}" for r, n in trk) or "none"),
             f"- snapshots complete: {snap[1]:,} of {snap[0]:,}"]
     miss = db.execute("SELECT missing_parts, COUNT(*) FROM tracking WHERE tracked=1 AND missing_parts<>'' "
-                      "GROUP BY missing_parts ORDER BY 2 DESC LIMIT 8").fetchall()
+                      "AND launch_obs>=? GROUP BY missing_parts ORDER BY 2 DESC LIMIT 8", (clock,)).fetchall()
     out += [f"  - missing {m}: {n}" for m, n in miss]
 
     out += ["", "## Credits", ""]
     for src, purpose, calls, credits, errors in db.execute(
-            "SELECT source, purpose, SUM(calls), SUM(credits), SUM(errors) FROM credit_ledger "
-            "GROUP BY source, purpose ORDER BY source, 4 DESC"):
+            "SELECT source, purpose, SUM(calls), SUM(credits), SUM(errors) FROM credit_ledger WHERE hour>=? "
+            "GROUP BY source, purpose ORDER BY source, 4 DESC", (hour_key(clock),)):
         out.append(f"- {src} / {purpose}: calls={calls:,} credits={credits:,} errors={errors:,}")
     proj = projection(db, now)
     out.append(f"- Helius projection: {'n/a' if proj is None else f'{proj:,.0f}'} credits per 30 days "
@@ -263,7 +306,9 @@ def report_day1(cfg: Config) -> list[str]:
     out += ["", "## Reliability", "",
             f"- websocket drops: {drops}; total time disconnected: {sum(gaps):.0f} s; longest gap: "
             f"{max(gaps, default=0):.0f} s",
-            f"- uptime: alive {up[0]:.1%}, websocket connected {up[1]:.1%}" if up else "- uptime: n/a"]
+            f"- uptime: alive {up[0]:.1%}, PumpPortal connected {up[1]:.1%}, public RPC stream connected "
+            f"{up[2]:.1%}" if up else "- uptime: n/a"]
+    out += ["", "## Launch sources (D-31)", "", *(f"- {line}" for line in launch_source_lines(db, now))]
     skew = [r[0] for r in db.execute("SELECT launch_obs - creation_block_time FROM tracking "
                                      "WHERE creation_block_time IS NOT NULL")]
     out.append(f"- launch observed_at minus creation block_time (s): {_fmt_q(quantiles(skew), digits=2)}")
@@ -347,7 +392,8 @@ def report_week1(cfg: Config) -> list[str]:
     out += ["", "## Clock", "",
             f"- launch observed_at minus creation block_time (s): {_fmt_q(quantiles(skew), digits=2)}"]
     up = uptime(db, now, 864000.0)
-    out.append(f"- uptime (10 d window): alive {up[0]:.1%}, websocket connected {up[1]:.1%}" if up else "- uptime n/a")
+    out.append(f"- uptime (10 d window): alive {up[0]:.1%}, PumpPortal connected {up[1]:.1%}, public RPC stream "
+               f"connected {up[2]:.1%}" if up else "- uptime n/a")
     return out
 
 

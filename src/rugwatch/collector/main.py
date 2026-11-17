@@ -1,4 +1,7 @@
-"""Collector entrypoint: `python -m rugwatch.collector.main run | check-env | record-stop | snapshot-state`."""
+"""Collector entrypoint: `python -m rugwatch.collector.main COMMAND`.
+
+Commands: run, check-env, record-stop, snapshot-state, coverage-check.
+"""
 
 from __future__ import annotations
 
@@ -18,6 +21,8 @@ from dotenv import load_dotenv
 
 from rugwatch import __version__
 from rugwatch.collector.budget import Budget
+from rugwatch.collector.coverage import LAG_S, coverage_loop, run_check
+from rugwatch.collector.launchlogs import ChainLaunchListener
 from rugwatch.collector.pumpportal import PumpPortalListener
 from rugwatch.collector.rpc import RpcClient, providers_from_env
 from rugwatch.collector.scanners import build_scanners
@@ -25,7 +30,7 @@ from rugwatch.collector.scheduler import Scheduler
 from rugwatch.collector.snapshot import Snapshotter
 from rugwatch.collector.state import State
 from rugwatch.config import REPO_ROOT, Config, load_config
-from rugwatch.storage.raw import DiskFullError, RawWriter
+from rugwatch.storage.raw import DiskFullError, RawWriter, make_record
 
 log = logging.getLogger("rugwatch.main")
 
@@ -87,27 +92,42 @@ def sd_notify(message: str) -> bool:
     return True
 
 
-def watchdog_tick(state: State, listener: PumpPortalListener, now: float) -> None:
+def watchdog_tick(state: State, listeners: dict[str, PumpPortalListener | ChainLaunchListener], now: float) -> None:
     """Ping the systemd watchdog (a hung event loop stops pinging and systemd kills it), and raise
-    StallError when no launch has arrived for STALL_RESTART_S (logged first, for uptime)."""
+    StallError when no source has delivered a launch for STALL_RESTART_S (logged first, for uptime).
+    A single silent source reconnects itself after LAUNCH_STALL_S; this is the last resort."""
     sd_notify("WATCHDOG=1")
-    gap = now - listener.last_launch_at
+    gap = now - max(lst.last_launch_at for lst in listeners.values())
     if gap > STALL_RESTART_S:
-        last_msg = listener.last_message_at
-        state.event("stall_restart", {"gap_s": round(gap, 1), "ws_connected": listener.connected,
-                                      "last_message_age_s": None if last_msg is None else round(now - last_msg, 1)})
+        state.event("stall_restart", {"gap_s": round(gap, 1), "connected": {
+            name: lst.connected for name, lst in listeners.items()}})
         raise StallError(f"no launch for {gap:.0f} s")
 
 
+def start_data_clock(state: State, writer: RawWriter, cfg: Config, now: float) -> float:
+    """The data clock starts when the collector first runs with both launch sources (D-32). Launches
+    observed earlier are pre-fix data: kept, flagged, never used for model claims."""
+    start = state.data_clock_start()
+    if start is None:
+        start = now
+        state.set_meta("data_clock_start", repr(now))
+        state.event("data_clock_start", {"ts": now, "version": __version__})
+        writer.write(make_record(observed_at=now, source="collector", kind="data_clock", purpose="launch_log",
+                                 status="ok", payload={"data_clock_start": now, "collector_version": __version__,
+                                                       "universe_version": cfg.universe_version,
+                                                       "reason": "second launch source (decision D-31/D-32)"}))
+    return start
+
+
 async def housekeeping(state: State, writer: RawWriter, budget: Budget, listener: PumpPortalListener,
-                       rpc: RpcClient) -> None:
+                       chain: ChainLaunchListener) -> None:
     last_log = last_prune = 0.0
     while True:
         await asyncio.sleep(HOUSEKEEPING_S)
         now = time.time()
-        watchdog_tick(state, listener, now)
+        watchdog_tick(state, {"pumpportal": listener, "publicrpc": chain}, now)
         writer.maybe_flush()
-        state.heartbeat(now, listener.connected)
+        state.heartbeat(now, listener.connected, chain.connected)
         budget.review(now)
         if now - last_prune >= 3600:
             last_prune = now
@@ -115,8 +135,9 @@ async def housekeeping(state: State, writer: RawWriter, budget: Budget, listener
         if now - last_log >= 300:
             last_log = now
             proj = budget.projection(now)
-            log.info("alive: ws=%s records=%d cycle_credits=%d projection_30d=%s throttle=%d hard_stop=%s free_gb=%.1f",
-                     listener.connected, writer.records_written, budget.cycle_used(now),
+            log.info("alive: ws=%s rpcws=%s records=%d cycle_credits=%d projection_30d=%s throttle=%d "
+                     "hard_stop=%s free_gb=%.1f",
+                     listener.connected, chain.connected, writer.records_written, budget.cycle_used(now),
                      "n/a" if proj is None else round(proj), budget.level, budget.hard_stop,
                      writer.free_bytes() / 1e9)
 
@@ -135,22 +156,26 @@ async def run_collector(cfg: Config) -> int:
     snapshotter = Snapshotter(cfg, state, rpc, writer, scanners, http)
     scheduler = Scheduler(cfg, state, rpc, writer, budget, snapshotter)
     listener = PumpPortalListener(cfg.collector.pumpportal, cfg.activity_filter, state, writer)
+    chain = ChainLaunchListener(state, writer, min(cfg.activity_filter.tick_s))
 
     now = time.time()
+    clock = start_data_clock(state, writer, cfg, now)
     last_beat = state.one("SELECT MAX(minute) FROM heartbeats")
     state.event("start", {"version": __version__,
                           "down_s": round(now - last_beat * 60) if last_beat is not None else None})
     scheduler.recover(now)
     sd_notify("READY=1")
-    log.info("collector %s started; providers=%s scanners=%s threshold_sol=%s", __version__,
-             [p.name for p in rpc.providers], [s.name for s in scanners], cfg.activity_filter.threshold_sol)
+    log.info("collector %s started; providers=%s scanners=%s threshold_sol=%s data_clock_start=%s", __version__,
+             [p.name for p in rpc.providers], [s.name for s in scanners], cfg.activity_filter.threshold_sol,
+             time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(clock)))
 
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, stop.set)
     tasks = [asyncio.ensure_future(c) for c in (
-        listener.run(), scheduler.run(), housekeeping(state, writer, budget, listener, rpc))]
+        listener.run(), chain.run(), scheduler.run(), housekeeping(state, writer, budget, listener, chain),
+        coverage_loop(rpc, state, writer, budget, cfg.collector.commitment))]
     stopper = asyncio.ensure_future(stop.wait())
     done, _pending = await asyncio.wait([*tasks, stopper], return_when=asyncio.FIRST_COMPLETED)
 
@@ -237,13 +262,38 @@ async def check_env(cfg: Config) -> int:
     return 0 if ok else EXIT_CONFIG
 
 
+async def coverage_now(cfg: Config, minutes: float) -> int:
+    """On-demand coverage check of the last `minutes` (ending LAG_S ago), e.g. right after a deploy."""
+    state = State(state_path(cfg))
+    writer = RawWriter(raw_root(cfg))
+    budget = Budget(state, cfg.collector.budget, billing_day())
+    rpc = RpcClient(providers_from_env(cfg.collector.rpc.max_rps), writer, budget)
+    end = time.time() - LAG_S
+    start = end - minutes * 60
+    since = state.get_meta("publicrpc_since")
+    if since is None or float(since) > start:
+        print("note: the public-RPC source was not running for the whole window")
+    try:
+        result = await run_check(rpc, state, writer, start, end, cfg.collector.commitment)
+    finally:
+        writer.close()
+        await rpc.aclose()
+        state.close()
+    for key, value in result.items():
+        print(f"{key:22s} {value}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="rugwatch-collector")
-    parser.add_argument("command", choices=["run", "check-env", "record-stop", "snapshot-state"])
+    parser.add_argument("command", choices=["run", "check-env", "record-stop", "snapshot-state", "coverage-check"])
+    parser.add_argument("--minutes", type=float, default=60.0, help="coverage-check window length")
     args = parser.parse_args(argv)
     load_dotenv(REPO_ROOT / ".env")
     setup_logging()
     cfg = load_config()
+    if args.command == "coverage-check":
+        return asyncio.run(coverage_now(cfg, args.minutes))
     if args.command == "snapshot-state":
         return snapshot_state(cfg)
     if args.command == "record-stop":

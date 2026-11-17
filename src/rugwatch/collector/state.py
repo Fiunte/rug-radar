@@ -71,9 +71,20 @@ CREATE TABLE IF NOT EXISTS credit_ledger (
 
 CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, ts REAL NOT NULL, kind TEXT NOT NULL, detail TEXT);
 CREATE INDEX IF NOT EXISTS events_kind ON events(kind, ts);
-CREATE TABLE IF NOT EXISTS heartbeats (minute INTEGER PRIMARY KEY, ws_connected INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS heartbeats (minute INTEGER PRIMARY KEY, ws_connected INTEGER NOT NULL,
+  rpcws_connected INTEGER NOT NULL DEFAULT 0);
+
+-- Which launch source saw each launch, and when (D-31). tokens.launch_obs = the earliest of these.
+CREATE TABLE IF NOT EXISTS launch_sources (
+  mint TEXT NOT NULL, source TEXT NOT NULL, observed_at REAL NOT NULL, sig TEXT,
+  PRIMARY KEY (mint, source)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS launch_sources_sig ON launch_sources(sig);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 """
+
+# Columns added after the first deployment: (table, column, definition). Applied once, idempotent.
+MIGRATIONS = (("heartbeats", "rpcws_connected", "INTEGER NOT NULL DEFAULT 0"),)
 
 
 class State:
@@ -84,6 +95,10 @@ class State:
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=NORMAL")
+        for table, column, definition in MIGRATIONS:
+            cols = {r[1] for r in self.db.execute(f"PRAGMA table_info({table})")}
+            if cols and column not in cols:
+                self.db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
         self.db.executescript(SCHEMA_SQL)
 
     def close(self) -> None:
@@ -112,16 +127,24 @@ class State:
         self.x("INSERT INTO events(ts,kind,detail) VALUES(?,?,?)",
                (ts if ts is not None else time.time(), kind, json.dumps(detail or {})))
 
-    def heartbeat(self, now: float, ws_connected: bool) -> None:
-        self.x("INSERT INTO heartbeats(minute,ws_connected) VALUES(?,?) "
-               "ON CONFLICT(minute) DO UPDATE SET ws_connected=MAX(ws_connected,excluded.ws_connected)",
-               (int(now // 60), int(ws_connected)))
+    def heartbeat(self, now: float, ws_connected: bool, rpcws_connected: bool = False) -> None:
+        self.x("INSERT INTO heartbeats(minute,ws_connected,rpcws_connected) VALUES(?,?,?) "
+               "ON CONFLICT(minute) DO UPDATE SET ws_connected=MAX(ws_connected,excluded.ws_connected), "
+               "rpcws_connected=MAX(rpcws_connected,excluded.rpcws_connected)",
+               (int(now // 60), int(ws_connected), int(rpcws_connected)))
+
+    def data_clock_start(self) -> float | None:
+        """Start of the current data clock (D-32): launches observed earlier are pre-fix data."""
+        value = self.get_meta("data_clock_start")
+        return float(value) if value is not None else None
 
     def prune(self, before: float) -> int:
         """Drop per-launch working rows older than `before`. Raw files keep everything; tracked
         tokens, the ledger, events and heartbeats are never pruned."""
         self.x("DELETE FROM filter_ticks WHERE mint IN (SELECT mint FROM tokens WHERE launch_obs<?)", (before,))
         self.x("DELETE FROM tracking WHERE tracked=0 AND decided_at<?", (before,))
+        self.x("DELETE FROM launch_sources WHERE observed_at<? AND mint NOT IN "
+               "(SELECT mint FROM tracking WHERE tracked=1)", (before,))
         cur = self.db.execute("DELETE FROM tokens WHERE launch_obs<? AND next_tick_due IS NULL", (before,))
         return cur.rowcount
 
@@ -145,6 +168,10 @@ class State:
              msg.get("name"), msg.get("symbol"), msg.get("uri"), msg.get("initialBuy"), msg.get("solAmount"),
              first_due))
         return cur.rowcount == 1
+
+    def add_launch_source(self, mint: str, source: str, observed_at: float, sig: str | None) -> None:
+        self.x("INSERT OR IGNORE INTO launch_sources(mint,source,observed_at,sig) VALUES(?,?,?,?)",
+               (mint, source, observed_at, sig))
 
     def due_filter_ticks(self, now: float) -> list[sqlite3.Row]:
         return self.q("SELECT mint, launch_obs, bonding_curve, next_tick_idx, next_tick_due, launcher "
