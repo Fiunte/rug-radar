@@ -1,100 +1,93 @@
 # Status (single source of truth for progress)
 
-Last updated: 2026-11-17 12:05 UTC (end of session 3).
+Last updated: 2026-11-17 12:35 UTC (end of session 4).
 
 ## Where we are
 
-- Milestone: **M1 collector** (2026-11-17 to 2026-12-01). M1 is done only when the exit checks
-  below pass.
-- Collector running as systemd user unit `rugwatch-collector` since 2026-11-17 02:49 UTC.
-  Redeployed 10:56 UTC with the new raw writer, the stall watchdog and the systemd watchdog; restarted
-  11:59 UTC with the full RPC chain (Helius -> Alchemy -> FluxRPC all `ok`) and Helius billing day 17.
-- **Waiting for the user: launch discovery.** PumpPortal's free stream misses about 78% of
-  pump.fun launches (v1 transactions). The free fix changes section 0 and needs approval
-  (`docs/decisions.md`, section C and the first open item).
-- Next checkpoint: **2026-11-18 after 03:00 UTC** -> `make status` and `make report-day1`.
+- Milestone: **M1 collector**. M1 is done only when the exit checks below pass.
+- **Data clock restarted at 2026-11-17 12:11:51 UTC** (D-32). That is when the collector 0.2.0
+  started with both launch sources: PumpPortal plus the public-RPC create-log stream (D-31,
+  approved). Launches observed earlier are pre-fix data: kept, flagged, never used for models or
+  claims. "Day N" counts from the restart.
+- Collector: systemd user unit `rugwatch-collector`, RPC chain Helius -> Alchemy -> FluxRPC,
+  Helius billing day 17, stall and systemd watchdogs on.
+- Next checkpoint: **2026-11-18 after 12:15 UTC** -> `make status` and `make report-day1`.
 
 ## Done
 
-- Spec files and CLAUDE.md pushed (`9a52fc9`); M1 code pushed (`11c50ae`). Every working change is
-  now committed and pushed.
-- Session 2 (2026-11-17):
-  - D-13 accepted.
-  - Scanner policy: raw scores stay private; GoPlus permission email drafted.
-  - Disk growth analysed and the raw writer fixed (-29%, D-27).
-  - Wall-clock bug in a scheduler test fixed.
-  - Watchdogs added: stall restart after 600 s with no launch, systemd `WatchdogSec`, every
-    stop logged (D-26).
-  - PumpPortal silence timeout raised to 180 s (D-28).
-  - NTP offset shown in `make status` (-6.7 ms, so timesyncd is kept).
-  - `make backup` now pulls from the desktop (D-29).
-  - `docs/runbook.md` written: disk cleanup, reboot test, SSH, fixed IP, desktop, Claude Code.
-  - Entry-point question recorded (D-30).
-  - CLAUDE.md now has the version-control rule.
-- Session 3 (2026-11-17): FluxRPC and Alchemy verified working; optional `FLUXRPC_RPC_URL` added;
-  `make status` and the reports now read `HELIUS_BILLING_DAY` (they always assumed day 1).
-- 80 unit tests pass; ruff and mypy clean.
+- Sessions 1-2: M1 collector, tests, Makefile, systemd unit; raw writer compression (-29%);
+  watchdogs; backup pull; runbook; decisions up to D-30.
+- Session 3: RPC fallback verified (Alchemy, FluxRPC `ok`); billing day read by the reports.
+- Session 4 (2026-11-17):
+  - Second launch source built and deployed (0.2.0), with a daily coverage check against the chain
+    (alert below 95%), rate-limit detection and per-source reconnects.
+  - HANDOFF section 0 updated with the user's approval (D-31).
+  - Pre-fix data policy and data clock (D-32).
+  - GoPlus: permission email sent by the user; GoPlus stays in private analysis until they reply.
+  - Disk: pip and JetBrains caches deleted (11.5 GB free).
+- 89 unit tests pass; ruff and mypy clean. Every change is committed and pushed.
 
 ## M1 exit checks (HANDOFF section 6) and how they will be met
 
-| Check | How | Date |
+| Check | How | Date (UTC) |
 | --- | --- | --- |
+| Launch coverage >= 95% (user's condition) | daily check in `make status` | daily from 2026-11-17 |
 | Uptime >= 95% over 10 days | heartbeats + logged stops (`make status`) | first possible 2026-11-27 |
-| Helius projection <= 800,000/month | `make status`, `report-week1` | 2026-11-24 |
+| Helius projection <= 800,000/month | `make status`, `report-week1` | 2026-11-24 12:15 |
 | Labels v0 | `make parse` + `make labels` on the desktop | 2026-11-25 |
 | 50-token audit (rule 5.2) | `make audit-sheet` 11-25; user marks it; `make audit-score` 11-28; if it fails, one adjustment round and a fresh 50 by 12-01 | 2026-11-25 to 12-01 (days 8-14) |
-| Every PLACEHOLDER replaced | from `report-week1` | 2026-11-24 |
-| Scanner terms checked | done, section A (GoPlus permission pending) | done |
+| Every PLACEHOLDER replaced | from `report-week1` | 2026-11-24 12:15 |
+| Scanner terms checked | done (section A); GoPlus permission pending | done |
 | Backup working | desktop set up, first `make backup`, weekly task | by 2026-11-22 |
 
 ## Known problems and open decisions
 
-- **Launch coverage (needs the user's decision):** about 22% of launches reach us. See above.
-- **Disk: 6.5 GB free.** Raw data grows about 80-100 MB/day after the fix; the main cost is the
-  signature pages set by `max_signature_pages: 3`. Full launch coverage would add only launch logs
-  and filter reads (a few MB/day), because the tracked tokens stay capped.
-- Credits: projection about 705k/30 d (target 800k); the throttle steps may start within days.
+- Public RPC endpoint: free, not meant for sustained use. If `make status` shows
+  `rate_limited_24h` > 0, the proposed fallback is FluxRPC's websocket (needs the user's approval
+  and the dashboard's "WebSocket" value; D-31).
+- Launches created while a stream reconnects are not backfilled; the daily coverage check
+  measures the loss.
+- With full coverage, 5 SOL passes about 4-5x more often than before; the tracked cap hash-samples
+  for now, and rule 5.1 sets the threshold on day 1.
+- Disk: 11.5 GB free; the user's sudo cleanup will add about 9.7 GB, and the Chrome and VS Code
+  caches another 5.2 GB.
+- Credits: projection about 715k/30 d (target 800k). Recheck after a day at full coverage.
 - Observed curve fee 125-203 bps per side (mean 173), above the 125 bps placeholder.
 
 ## What the user needs to do
 
-1. **Now: decide on launch discovery.** Approve or refuse adding the public-RPC `logsSubscribe`
-   launch source (free; a change to section 0).
-2. **Now: send the GoPlus permission email** (draft in the session-2 answer).
-3. Soon: free disk space: `docs/runbook.md` step 1 (about 19.7 GB of safe deletions).
-4. Done: RPC fallback (Alchemy and FluxRPC `ok`) and `HELIUS_BILLING_DAY` (17).
-5. Fix the allow rule: `/permissions` shows `Bash(got push origin main)` (typo); it should be
-   `Bash(git push origin main)`.
-6. **By 2026-11-22:** runbook steps 3 and 4 (SSH, fixed IP, desktop, first backup, weekly task,
+1. **Now:** paste the sudo cleanup block from the session-4 answer (journal, apt, old snaps).
+   Later, close Chrome and VS Code and run `rm -rf ~/.cache/google-chrome ~/.cache/vscode-cpptools`,
+   or tell Claude to do it.
+2. **When GoPlus replies:** paste the answer into a session.
+3. **By 2026-11-20 12:15 UTC (day 3):** Solana Tracker account; add `SOLANATRACKER_API_KEY` to
+   `.env`. Say whether GoPlus gave a key only or a key plus secret.
+4. **By 2026-11-22:** runbook steps 3 and 4 (SSH, fixed IP, desktop, first backup, weekly task,
    Claude Code), then step 2 (reboot test, checked from the desktop).
-7. **2026-11-18 after 03:00 UTC:** run `make status` and `make report-day1`; paste both, plus the
+5. **2026-11-18 after 12:15 UTC:** run `make status` and `make report-day1`; paste both, plus the
    Helius dashboard credit count.
-8. **By 2026-11-20 (day 3):** Solana Tracker account; add `SOLANATRACKER_API_KEY` to `.env`.
-   Say whether GoPlus gave a key only or a key plus secret.
-9. Keep the laptop on power and network; do not suspend it.
+6. Keep the laptop on power and network; do not suspend it.
 
 ## Next steps (assistant)
 
-1. If approved: build the second launch source, record per token which source saw it, and deploy.
-   The universe is not frozen yet, so `universe_version` stays.
-2. Day 1 (2026-11-18): rule 5.1 from `report-day1` (threshold); check credits against the
-   dashboard, 429s, throttle level and the launch count against the independent on-chain count.
-3. Day 3 (2026-11-20): scanners on; check the Solana Tracker response shape; scanner limits and
+1. Day 1 (2026-11-18 12:15 UTC): rule 5.1 from `report-day1` (threshold); check the coverage
+   check, rate limits, credits against the dashboard, 429s, throttle level.
+2. Day 3 (2026-11-20): scanners on; check the Solana Tracker response shape; scanner limits and
    on-time coverage (extend `deadline_s` to 60 once if below 80%).
-4. Week 2 on the desktop: `make parse`, `make labels` (labels v0), `make audit-sheet`,
+3. Week 2 on the desktop: `make parse`, `make labels` (labels v0), `make audit-sheet`,
    `make audit-score`.
-5. Day 7 (2026-11-24): `report-week1`; tracked cap by rule 5.1.5; replace the PLACEHOLDERs.
-6. Day 14 (2026-12-01): universe freeze; M1 exit checks; then M2.
+4. Day 7 (2026-11-24 12:15): `report-week1`; tracked cap by rule 5.1.5; replace the PLACEHOLDERs.
+5. Day 14 (2026-12-01 12:15): universe freeze; M1 exit checks; then M2.
 
 ## Checkpoints
 
 | Date (UTC) | What |
 | --- | --- |
-| 2026-11-18 | report-day1, threshold by rule 5.1 |
-| 2026-11-20 | scanners on (needs the Solana Tracker key) |
+| 2026-11-18 12:15 | report-day1, threshold by rule 5.1, first daily coverage check reviewed |
+| 2026-11-20 12:15 | scanners on (needs the Solana Tracker key) |
 | 2026-11-22 | backup working, desktop set up, reboot test done |
-| 2026-11-24 | report-week1, tracked cap, placeholders |
+| 2026-11-24 12:15 | report-week1, tracked cap, placeholders |
 | 2026-11-25 | labels v0, audit sheet out |
 | 2026-11-27 | earliest 10-day uptime check (>= 95%) |
 | 2026-11-28 | audit scored (rule 5.2) |
-| 2026-12-01 | universe freeze, M1 exit |
+| 2026-12-01 12:15 | universe freeze, M1 exit |

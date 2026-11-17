@@ -7,6 +7,10 @@ without anyone logging in.
 
 ## 1. Free disk space on the laptop (target: 20 GB free)
 
+Status 2026-11-17 12:10 UTC: pip and JetBrains caches deleted by Claude (6.0 -> 11.5 GB free).
+Chrome and VS Code were running, so their caches were left. Still to do: the three `sudo` rows and
+the snap block (user), and the Chrome and VS Code caches once both apps are closed.
+
 Safe: these are caches and old package versions. Programs rebuild them when needed, and nothing in
 the project uses them. About 19.7 GB in total:
 
