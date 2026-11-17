@@ -161,6 +161,12 @@ https://docs.solanatracker.io/pricing.md
   (`rpc.primary: helius`, `rpc.fallback: alchemy`). Endpoint `https://eu.fluxrpc.com?key=...`.
   Status on 2026-11-17: the key in `.env` is rejected (HTTP 401 "invalid api key"). User decision
   (2026-11-17): if it still fails after the user re-checks the key, remove FluxRPC.
+  Follow-up (2026-11-17): the user confirmed `FLUXRPC_API_KEY` holds the dashboard's "API Key"
+  value, copied correctly, and it uses the documented form (`https://eu.fluxrpc.com?key=...`, per
+  fluxrpc.com/docs/rpc), yet it gets 401. The dashboard also lists "RPC", "Shield Key" and
+  "WebSocket" values. The code now takes `FLUXRPC_RPC_URL`, the dashboard's "RPC" value used as-is
+  as the endpoint, which wins over `FLUXRPC_API_KEY`. If `make check-env` still fails with it,
+  FluxRPC is removed. Free plan: 15 req/s, 10 GB bandwidth a month, enough for an emergency tier.
 - **D-21 Clock.** The laptop is synced by systemd-timesyncd, not chrony (HANDOFF 6 item 11). It is
   accurate enough for second-level timestamps and needs no sudo; `make status` shows the sync flag
   and the reports show observed-minus-block-time. Installing chrony stays an option.

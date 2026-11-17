@@ -73,7 +73,11 @@ def providers_from_env(max_rps: float) -> list[Provider]:
         out.append(Provider("helius", f"https://mainnet.helius-rpc.com/?api-key={key}", max_rps))
     if key := os.environ.get("ALCHEMY_API_KEY"):
         out.append(Provider("alchemy", f"https://solana-mainnet.g.alchemy.com/v2/{key}", max_rps))
-    if key := os.environ.get("FLUXRPC_API_KEY"):
+    # FluxRPC: the dashboard's "RPC" value is a complete endpoint URL and is used as-is; it wins over
+    # the documented API-key form, which the "API Key" value failed with (HTTP 401, D-20).
+    if url := os.environ.get("FLUXRPC_RPC_URL", "").strip():
+        out.append(Provider("fluxrpc", url, max_rps))
+    elif key := os.environ.get("FLUXRPC_API_KEY"):
         out.append(Provider("fluxrpc", f"https://eu.fluxrpc.com?key={key}", max_rps))
     else:
         out.append(Provider("public", PUBLIC_RPC_URL, 2.0))

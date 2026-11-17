@@ -158,9 +158,14 @@ browser. The repo's `CLAUDE.md` tells every session which machine it is on and h
 Before working on a machine, run `git pull --ff-only` there, because both machines push to the same repo.
 
 ## 5. RPC fallback check (laptop)
-After enabling Solana Mainnet in the Alchemy app and re-checking the FluxRPC key, run
-`make check-env`. Each tier should print `ok`. The collector retries failed providers hourly, so no
-restart is needed. If FluxRPC still fails, say so and it will be removed (decision D-20).
+- Alchemy: enable Solana Mainnet for the app in the Alchemy dashboard. The collector retries it
+  hourly, so no restart is needed.
+- FluxRPC: copy the dashboard's **"RPC"** value (the whole URL, starting with `https://`) into `.env`
+  as `FLUXRPC_RPC_URL=<that value>`. Leave `FLUXRPC_API_KEY` as it is; the URL takes precedence.
+
+Then run `make check-env`; it prints names and `ok`/errors only, never values. If both rpc lines
+say `ok`, run `systemctl --user restart rugwatch-collector` so the collector loads the new
+variable. If FluxRPC still fails, say so and it will be removed (decision D-20).
 
 ## 6. Letting Claude push without asking
 In Claude Code, run `/permissions` -> Allow -> add the rule `Bash(git push origin main)`. Force pushes

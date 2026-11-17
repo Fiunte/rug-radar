@@ -106,7 +106,7 @@ def test_api_keys_never_reach_records_or_logs(env_factory: Callable[..., Env],
 
 
 def test_providers_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in ("HELIUS_API_KEY", "ALCHEMY_API_KEY", "FLUXRPC_API_KEY"):
+    for name in ("HELIUS_API_KEY", "ALCHEMY_API_KEY", "FLUXRPC_API_KEY", "FLUXRPC_RPC_URL"):
         monkeypatch.delenv(name, raising=False)
     assert [p.name for p in providers_from_env(8)] == ["public"]
     monkeypatch.setenv("HELIUS_API_KEY", "h")
@@ -114,6 +114,11 @@ def test_providers_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert [p.name for p in providers_from_env(8)] == ["helius", "alchemy", "public"]
     monkeypatch.setenv("FLUXRPC_API_KEY", "f")
     assert [p.name for p in providers_from_env(8)] == ["helius", "alchemy", "fluxrpc"]
+    assert providers_from_env(8)[2].url == "https://eu.fluxrpc.com?key=f"
+    monkeypatch.setenv("FLUXRPC_RPC_URL", f" https://rpc.example/{SECRET} ")  # dashboard "RPC" value wins
+    providers = providers_from_env(8)
+    assert [p.name for p in providers] == ["helius", "alchemy", "fluxrpc"]
+    assert providers[2].url == f"https://rpc.example/{SECRET}" and SECRET not in repr(providers)
 
 
 # ------------------------------------------------------------------- budget
