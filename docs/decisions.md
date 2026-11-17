@@ -88,7 +88,9 @@ https://docs.solanatracker.io/pricing.md
   `make check-env` was added. Reports read the state database; raw files stay the source of truth.
 - **D-06 Raw schema additions** (schema stays 1). `source` also takes `collector` (kinds `tracking`
   = the decision for every token, `snapshot_summary` = snapshot_ts, P0, missing parts) and `fluxrpc` /
-  `public`. `request` also carries `accounts`, `items` (per-account mint, tick_s, role), `address`,
+  `public`, and `publicrpc` (the second launch source, kind `new_token`, payload = the
+  `logsNotification` value {signature, err, logs}, `slot` = notification context slot). Collector
+  kinds added later: `coverage` (daily coverage check result), `data_clock` (D-32). `request` also carries `accounts`, `items` (per-account mint, tick_s, role), `address`,
   `signature`, `before`, `part` (snapshot part name). For batched reads `mint` and `tick_s` at the top
   level are null and live in `request.items`.
 - **D-07 Credit accounting.** Helius charges 1 credit per call for every method used here
@@ -193,7 +195,8 @@ https://docs.solanatracker.io/pricing.md
   Also: `WatchdogSec=120` (the collector pings systemd every 5 s, so a hung event loop is killed and
   restarted), and `ExecStopPost` runs `record-stop`, logging every stop with systemd's reason
   (`success`, `exit-code`, `watchdog`, `signal`). `make status` counts stops and stall restarts over
-  10 days; uptime comes from the per-minute heartbeats.
+  10 days; uptime comes from the per-minute heartbeats. Since D-31 the 600 s limit applies to the
+  newest launch from any source; a single silent source reconnects itself after 300 s.
 - **D-27 Raw compression.** One zstd stream per part file, flushed with `FLUSH_BLOCK` every 15 s,
   and the frame finished on close, rotation or date change. The previous writer made each 15 s
   flush its own frame, so records never shared compression context. Replaying the first 7.9 h:
@@ -210,6 +213,65 @@ https://docs.solanatracker.io/pricing.md
   are append-only. It never deletes on either side and refuses to run on the collector laptop.
 - **D-30 Entry point (HANDOFF section 0 open question).** User decision 2026-11-17: keep the
   default. The 5-minute snapshot is used now, and the graduation snapshot is added in M3.
+- **D-31 Second launch source (HANDOFF section 0 changed with the user's approval, 2026-11-17).**
+  PumpPortal's free stream missed about 78% of launches: all those in version-1 transactions
+  (section C). Added: one websocket to the public Solana RPC (`wss://api.mainnet-beta.solana.com`),
+  `logsSubscribe` with `mentions: [TSLvdd1pWpHVjahSpsvCXUbgwsL3JAcvokwaKt1eokM]`, which is the
+  pump.fun mint authority and appears in every create; commitment `confirmed`. Free, no key, create
+  logs only (not a trade stream), not Helius.
+  - Each create's logs carry the CreateEvent and the dev buy's TradeEvent, so no RPC call is needed
+    per launch. Every notification is written to raw (`publicrpc/new_token`, failed and non-create
+    ones too; about 9 KB each, about 26 MB/day compressed).
+  - Merge: both sources insert into `tokens`. The first source to report a mint sets `launch_obs`
+    (t0, D-02), and `launch_sources` records every source that saw it. The public RPC is usually
+    about 0.3 s earlier than PumpPortal. Fields from the public RPC use PumpPortal's names and units.
+  - Disconnects: reconnect with backoff 1/2/5/10/30/60 s. A source is also reconnected after 120 s
+    with no message at all, or 300 s with no launch while connected (PumpPortal too). The whole
+    collector restarts only when no source has delivered a launch for 600 s (D-26).
+  - Launches created while the stream is reconnecting are not backfilled. They are caught only if
+    PumpPortal saw them; the daily coverage check measures the loss.
+  - Rate limiting: HTTP 429 at the handshake, close codes 1008/1013, or an error mentioning
+    rate/limit/429. Each is logged as `rpcws_rate_limited`, backed off 60/300/900 s, and shown in
+    `make status` with an alert.
+  - **Fallback if it gets rate-limited (proposal; needs the user's approval):** the same
+    subscription on FluxRPC's websocket, the dashboard's "WebSocket" value. FluxRPC's free plan
+    includes websocket access. Launch logs are about 245 MB/day uncompressed on the wire, about
+    7.4 GB/month, under its 10 GB/month. Second choice: Alchemy's websocket, after measuring its
+    compute-unit cost per notification.
+  - Daily coverage check (`collector/coverage.py`), the user's condition:
+    - Once a day, on the hour ending 5 minutes earlier, and only once the public-RPC stream has run
+      for the whole hour.
+    - Chain side: all successful transactions mentioning the mint authority
+      (`getSignaturesForAddress`, about 2 pages).
+    - A signature recorded as a launch counts as seen. Up to 60 unseen signatures are fetched and
+      classified as create or not (PumpSwap pool creation also mentions the authority); the
+      missed-create count is extrapolated from that sample.
+    - Coverage = seen / (seen + estimated missed), overall and per source. It costs about
+      70 Helius credits a day.
+    - `make status` and `report-day1` show the last check and alert below 95%.
+    - `python -m rugwatch.collector.main coverage-check --minutes N` runs a check on demand.
+  - Collector version 0.2.0. New state: `launch_sources`, `heartbeats.rpcws_connected`.
+- **D-32 Data collected before the fix; the data clock.** Options were: exclude it, keep it
+  flagged, or bump `universe_version`. Decision: **keep it, flagged, and exclude it from every model,
+  benchmark and claim.** It may be used only for pipeline development (parser, labels, audit
+  tooling).
+  - Flag: `launch_obs < data_clock_start`. The start is stored in the state database
+    (`meta.data_clock_start`) and in raw (`collector/data_clock`); collector versions 0.1.0 vs 0.2.0
+    also tell the periods apart.
+  - Why not bump `universe_version`: the universe is not frozen yet (rule 5.1.6 bumps it only after
+    the day-14 freeze), `config.yaml` values change only through section 5 rules, and the flag above
+    is exact.
+  - **The data clock restarted at 2026-11-17 12:11:51 UTC** (the first start of 0.2.0). Everything
+    "day N" is counted from it. The scheduler's 24 h rate estimates count only decisions after it
+    (otherwise the jump from ~22% to full coverage would have overstated every sampling
+    probability for a day), and `report-day1` counts only launches after it.
+  - New dates: report-day1 2026-11-18 after 12:15 UTC; day 3 2026-11-20 12:15; report-week1
+    2026-11-24 12:15; audit from day 8, 2026-11-25; universe freeze and M1 exit 2026-12-01 12:15 UTC.
+    The dates are unchanged; only the hour moves.
+  - The 10-day uptime check does not depend on the data clock.
+  - Tokens tracked before the clock are polled until their tracking ends (about 24 h later), because
+    each already has a snapshot and stopping halfway would leave it incomplete. This costs credits
+    but nothing else.
 
 ## C. M1 measurements so far (2026-11-17, trial runs of ~10 minutes)
 
@@ -261,13 +323,7 @@ First 7.9 h (to 2026-11-17 10:41 UTC):
 
 ## D. Open items
 
-- **Waiting for the user: launch discovery.** PumpPortal misses about 78% of launches (section C).
-  Recommended fix: add the public-RPC `logsSubscribe` launch source next to PumpPortal (free, one
-  more websocket, no trade stream, not Helius), merge both by mint, and record per token which
-  source saw it first. This changes section 0, so it needs the user's approval. Until then the
-  universe is "launches PumpPortal reports". It is not frozen until day 14, but every day collected
-  before the fix is a biased sample.
-
+- Launch discovery: resolved by D-31 (approved 2026-11-17); first coverage numbers in section C.
 - Day 3: measure RugCheck / GoPlus limits and on-time coverage; verify the Solana Tracker response
   shape; record Alchemy cost per method once the network is enabled.
 - Storage: signature pages dominate (about 100-250 KB per tracked token). Measure in `report-week1`.

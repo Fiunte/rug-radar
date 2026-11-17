@@ -9,7 +9,7 @@ Audience: the implementing model. Follow this file and `config.yaml`. Where they
 - **Free tiers only.** No spend without the user's approval (rule 5.3).
 - **Paper trading only.** No private keys, no wallet/keypair objects, no `sendTransaction`, no signing code anywhere in the repo until the user explicitly says so. A unit test greps `src/` for `Keypair|sendTransaction|sign_transaction|private_key` and fails on a hit.
 - **Time-based splits only.** Never a random split. Never plain accuracy as a headline.
-- **Data access:** PumpPortal free streams (new token, migration) on one websocket; everything else by polling RPC accounts. No trade streams, no Helius websocket (both metered).
+- **Data access:** PumpPortal free streams (new token, migration) on one websocket, plus the public Solana RPC websocket (`wss://api.mainnet-beta.solana.com`) with one `logsSubscribe` on transactions that mention the pump.fun mint authority, i.e. create logs only, as a second launch source; everything else by polling RPC accounts. No trade streams, no Helius websocket (both metered). *Changed 2026-11-17 with the user's approval: PumpPortal's free stream was found to miss ~78% of launches (those in version-1 transactions); see `docs/decisions.md` D-31/D-32. Launch coverage is checked daily against the chain and must stay >= 95%. Any other launch source needs the user's approval.*
 - **Hardware:** laptop (Ubuntu, 8 GB) runs the collector only. Desktop (WSL, 16 GB) runs parsing, training, simulator, dashboard. No GPU use.
 - **Snapshot definition:** when the 300 s filter tick passes and the token is accepted, fire the snapshot batch. `snapshot_ts` = `observed_at` of the batch's closing reserve read; `P0` = price from that read. Parts not returned within 45 s are null.
 - **Two notions of time, used everywhere:**
@@ -78,7 +78,7 @@ reports/      docs/{decisions.md,writeup.md}    data/ (gitignored)
 ### 3.1 Raw record (one JSON object per line, zstd, append-only)
 
 ```json
-{"schema":1,"observed_at":"2026-11-17T00:00:00.123456Z","source":"pumpportal|helius|alchemy|rugcheck|goplus|solanatracker",
+{"schema":1,"observed_at":"2026-11-17T00:00:00.123456Z","source":"pumpportal|publicrpc|helius|alchemy|rugcheck|goplus|solanatracker",
  "kind":"new_token|migration|accounts|signatures|transaction|largest_accounts|scanner",
  "mint":"<base58 or null>","purpose":"launch_log|filter|snapshot|price|balance|creator|holders|scanner",
  "tick_s":300,"slot":123456789,"status":"ok|error|timeout","latency_ms":118,
@@ -201,7 +201,7 @@ Structural guard behind all four: feature functions receive only an `AsOfView(sn
 | --- | --- | --- |
 | 1 | Bonding-curve account layout, program ids, create instruction variants, Token-2022 mints | Decode against the current official pump.fun IDL; unit-test on 20 live accounts; take token accounts from `postTokenBalances`, never derive them |
 | 2 | Real curve fee: 125 bps assumed from secondary sources; the official fee page looked outdated; fee may differ per token under the creator fee models | Compute `fee_bps` on every parsed early trade; report the distribution; use the per-token fee in the simulator |
-| 3 | PumpPortal payload fields, reconnect behaviour, missed launches | Log gaps; compare daily launch count with an independent public figure (~26,000 a day in autumn 2026) |
+| 3 | PumpPortal payload fields, reconnect behaviour, missed launches | Log gaps; compare daily launch count with an independent public figure (~26,000 a day in autumn 2026). *Settled 2026-11-17: PumpPortal's free stream misses v1-transaction launches; second source added (section 0), daily coverage check against the chain, alert below 95%.* |
 | 4 | Helius: 1 credit per 100-account `getMultipleAccounts`, 10 rps, credit burn | Read the dashboard after day 1; reconcile with `credit_ledger` |
 | 5 | RugCheck free limit and whether a key is needed; GoPlus credits per Solana call; Alchemy cost per Solana method | Measure on day 3; record in `docs/decisions.md` |
 | 6 | Scanner readiness at 5 min: do they return a score for a 5-minute-old token within 25 s | If a scanner's on-time coverage is below 80%, extend `snapshot_batch.deadline_s` to 60 once, in M1 only |
