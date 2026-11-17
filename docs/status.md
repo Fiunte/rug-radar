@@ -1,13 +1,14 @@
 # Status (single source of truth for progress)
 
-Last updated: 2026-11-17 11:45 UTC (end of session 2).
+Last updated: 2026-11-17 12:05 UTC (end of session 3).
 
 ## Where we are
 
 - Milestone: **M1 collector** (2026-11-17 to 2026-12-01). M1 is done only when the exit checks
   below pass.
 - Collector running as systemd user unit `rugwatch-collector` since 2026-11-17 02:49 UTC.
-  Redeployed 10:56 UTC with the new raw writer, the stall watchdog and the systemd watchdog.
+  Redeployed 10:56 UTC with the new raw writer, the stall watchdog and the systemd watchdog; restarted
+  11:59 UTC with the full RPC chain (Helius -> Alchemy -> FluxRPC all `ok`) and Helius billing day 17.
 - **Waiting for the user: launch discovery.** PumpPortal's free stream misses about 78% of
   pump.fun launches (v1 transactions). The free fix changes section 0 and needs approval
   (`docs/decisions.md`, section C and the first open item).
@@ -30,6 +31,8 @@ Last updated: 2026-11-17 11:45 UTC (end of session 2).
   - `docs/runbook.md` written: disk cleanup, reboot test, SSH, fixed IP, desktop, Claude Code.
   - Entry-point question recorded (D-30).
   - CLAUDE.md now has the version-control rule.
+- Session 3 (2026-11-17): FluxRPC and Alchemy verified working; optional `FLUXRPC_RPC_URL` added;
+  `make status` and the reports now read `HELIUS_BILLING_DAY` (they always assumed day 1).
 - 80 unit tests pass; ruff and mypy clean.
 
 ## M1 exit checks (HANDOFF section 6) and how they will be met
@@ -47,7 +50,6 @@ Last updated: 2026-11-17 11:45 UTC (end of session 2).
 ## Known problems and open decisions
 
 - **Launch coverage (needs the user's decision):** about 22% of launches reach us. See above.
-- **No working RPC fallback.** Alchemy: HTTP 403; FluxRPC: HTTP 401. Helius carries everything.
 - **Disk: 6.5 GB free.** Raw data grows about 80-100 MB/day after the fix; the main cost is the
   signature pages set by `max_signature_pages: 3`. Full launch coverage would add only launch logs
   and filter reads (a few MB/day), because the tracked tokens stay capped.
@@ -60,17 +62,16 @@ Last updated: 2026-11-17 11:45 UTC (end of session 2).
    launch source (free; a change to section 0).
 2. **Now: send the GoPlus permission email** (draft in the session-2 answer).
 3. Soon: free disk space: `docs/runbook.md` step 1 (about 19.7 GB of safe deletions).
-4. Soon: Alchemy dashboard: enable Solana Mainnet; re-check the FluxRPC key; then `make check-env`.
-5. Helius dashboard: add `HELIUS_BILLING_DAY=<day>` to `.env`, then
-   `systemctl --user restart rugwatch-collector`.
+4. Done: RPC fallback (Alchemy and FluxRPC `ok`) and `HELIUS_BILLING_DAY` (17).
+5. Fix the allow rule: `/permissions` shows `Bash(got push origin main)` (typo); it should be
+   `Bash(git push origin main)`.
 6. **By 2026-11-22:** runbook steps 3 and 4 (SSH, fixed IP, desktop, first backup, weekly task,
    Claude Code), then step 2 (reboot test, checked from the desktop).
 7. **2026-11-18 after 03:00 UTC:** run `make status` and `make report-day1`; paste both, plus the
    Helius dashboard credit count.
 8. **By 2026-11-20 (day 3):** Solana Tracker account; add `SOLANATRACKER_API_KEY` to `.env`.
    Say whether GoPlus gave a key only or a key plus secret.
-9. Optional: allow `Bash(git push origin main)` in `/permissions` (runbook step 6).
-10. Keep the laptop on power and network; do not suspend it.
+9. Keep the laptop on power and network; do not suspend it.
 
 ## Next steps (assistant)
 

@@ -167,6 +167,10 @@ https://docs.solanatracker.io/pricing.md
   "WebSocket" values. The code now takes `FLUXRPC_RPC_URL`, the dashboard's "RPC" value used as-is
   as the endpoint, which wins over `FLUXRPC_API_KEY`. If `make check-env` still fails with it,
   FluxRPC is removed. Free plan: 15 req/s, 10 GB bandwidth a month, enough for an emergency tier.
+  Then at 11:58 UTC `make check-env` returned `ok` for the existing API-key form (the key probably
+  needed time to activate), and Alchemy returned `ok` too. `FLUXRPC_RPC_URL` stays as an optional
+  override and is not set. The provider chain Helius -> Alchemy -> FluxRPC is live since the
+  11:59 UTC restart.
 - **D-21 Clock.** The laptop is synced by systemd-timesyncd, not chrony (HANDOFF 6 item 11). It is
   accurate enough for second-level timestamps and needs no sudo; `make status` shows the sync flag
   and the reports show observed-minus-block-time. Installing chrony stays an option.
