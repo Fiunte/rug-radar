@@ -11,8 +11,8 @@ Last updated: 2026-11-17 06:10 UTC (end of session 1).
 
 ## Done
 
-- HANDOFF.md, config.yaml, CLAUDE.md committed and pushed (`9a52fc9`, on origin/main).
-  The M1 code is **not committed** (not asked).
+- HANDOFF.md, config.yaml, CLAUDE.md committed and pushed (`9a52fc9`). M1 code committed and
+  pushed (`11c50ae`), 2026-11-17.
 - Scanner terms read; findings in `docs/decisions.md` section A.
 - M1 code: typed config, PumpPortal listener, RPC client (rate limit, fallback, 429 retry),
   scheduler (filter ticks, tracking decision, price/balance/holder polls), snapshot batch, scanner
@@ -42,7 +42,7 @@ Last updated: 2026-11-17 06:10 UTC (end of session 1).
 ## What the user needs to do
 
 1. Done: `git push origin main` (2026-11-17).
-2. Now: say whether the M1 code should be committed and pushed.
+2. Done: M1 code committed and pushed (`11c50ae`).
 3. Soon: Alchemy dashboard -> enable Solana Mainnet for the app. Re-check the FluxRPC key. Then
    `make check-env` should show `ok` for both (no restart needed; the collector retries hourly).
 4. Soon: free disk space on the laptop (20 GB or more), and set up `make backup DEST=...` weekly.
