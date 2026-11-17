@@ -19,8 +19,8 @@ option and log it in `docs/decisions.md`. Change `config.yaml` values only via H
 - No leakage: a feature for snapshot S uses only rows with `available_at <= snapshot_ts(S)`, via
   the as-of loader; the four leakage tests must pass.
 - Never open, print, log or commit `.env`. API keys never appear in logs, raw records or errors.
-- Free tiers only. Data access: PumpPortal free streams + public-RPC create-log stream + RPC
-  polling; no trade streams, no Helius websocket. Launch coverage must stay >= 95%.
+- Free tiers only. Data: PumpPortal free streams + public-RPC create-log stream (FluxRPC ws as
+  auto fallback; coverage >= 95%) + RPC polling; no trade streams, no Helius websocket.
 - Stop and ask the user before: spending money, changing anything in section 0, changing the
   claim sentence, or any step towards real trading.
 

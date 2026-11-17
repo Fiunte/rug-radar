@@ -233,7 +233,7 @@ https://docs.solanatracker.io/pricing.md
   - Rate limiting: HTTP 429 at the handshake, close codes 1008/1013, or an error mentioning
     rate/limit/429. Each is logged as `rpcws_rate_limited`, backed off 60/300/900 s, and shown in
     `make status` with an alert.
-  - **Fallback if it gets rate-limited (proposal; needs the user's approval):** the same
+  - **Fallback if it gets rate-limited (pre-approved by the user and built on 2026-11-17: D-33):** the same
     subscription on FluxRPC's websocket, the dashboard's "WebSocket" value. FluxRPC's free plan
     includes websocket access. Launch logs are about 245 MB/day uncompressed on the wire, about
     7.4 GB/month, under its 10 GB/month. Second choice: Alchemy's websocket, after measuring its
@@ -272,6 +272,30 @@ https://docs.solanatracker.io/pricing.md
   - Tokens tracked before the clock are polled until their tracking ends (about 24 h later), because
     each already has a snapshot and stopping halfway would leave it incomplete. This costs credits
     but nothing else.
+- **D-33 FluxRPC websocket fallback for the create-log stream (pre-approved by the user,
+  2026-11-17).**
+  - Endpoint: `wss://ws.eu.fluxrpc.com?key=<FLUXRPC_API_KEY>`. The host is from
+    fluxrpc.com/docs/websocket; the key parameter has the same form as their HTTP endpoint.
+    `FLUXRPC_WS_URL` overrides it. Verified with `make check-env`: create logs arrive. The HTTP host
+    with `wss://` returned HTTP 503. FluxRPC documents `logsSubscribe` with a `mentions` filter.
+  - When the public endpoint rate-limits us (HTTP 429 at the handshake, close codes 1008/1013, or a
+    rate-limit error), the stream switches to FluxRPC at once.
+  - On the fallback, it goes back to the public endpoint after 1 hour (a planned reconnect of about
+    1 s; if the public endpoint still rate-limits, it switches straight back). It also goes back
+    after 3 consecutive FluxRPC failures, or at once if FluxRPC rate-limits too.
+  - Every switch is an `rpcws_switch` event with its reason. `make status` shows the endpoint in use
+    (flagged while on FluxRPC) and the switches in the last 24 h.
+  - Bandwidth: every byte received from and sent to FluxRPC (websocket messages, and HTTP requests
+    and responses of the emergency RPC tier) is counted per UTC calendar month in
+    `bandwidth_ledger`. The counts are uncompressed payload sizes, so they are an upper bound.
+    FluxRPC's own billing cycle is unknown, hence the calendar month.
+  - `make status` shows the month's usage against 10 GB and alerts from 80%. The fallback is not
+    used above 90% (9 GB). Then the stream stays on the public endpoint with the long backoff,
+    PumpPortal still runs, and the daily coverage check shows the loss.
+  - A full month on FluxRPC would need about 8.4 GB (about 9 KB x about 31k creates a day), so the
+    hourly return to the public endpoint matters.
+  - The raw `source` and `launch_sources.source` name the endpoint (`publicrpc` or `fluxrpc`), so
+    the coverage check reports them separately. Collector 0.2.1. The data clock is unchanged.
 
 ## C. M1 measurements so far (2026-11-17, trial runs of ~10 minutes)
 
@@ -330,6 +354,8 @@ After the second launch source (data clock start 2026-11-17 12:11:51 UTC):
   The public-RPC stream had no drops and no rate limiting. PumpPortal dropped once (12:13,
   reconnected after 9.6 s).
 - Raw storage of the public-RPC stream: 0.3 MB in 24 min (about 19 MB/day).
+- First automatic daily check (window 12:16-13:16 UTC): about 1,481 creates on chain (about
+  35k/day at this hour); all sources 99.6%, public RPC 99.4%, PumpPortal 26.5%.
 
 ## D. Open items
 

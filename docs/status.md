@@ -1,6 +1,6 @@
 # Status (single source of truth for progress)
 
-Last updated: 2026-11-17 12:35 UTC (end of session 4).
+Last updated: 2026-11-17 13:35 UTC (end of session 5).
 
 ## Where we are
 
@@ -9,8 +9,10 @@ Last updated: 2026-11-17 12:35 UTC (end of session 4).
   started with both launch sources: PumpPortal plus the public-RPC create-log stream (D-31,
   approved). Launches observed earlier are pre-fix data: kept, flagged, never used for models or
   claims. "Day N" counts from the restart.
-- Collector: systemd user unit `rugwatch-collector`, RPC chain Helius -> Alchemy -> FluxRPC,
-  Helius billing day 17, stall and systemd watchdogs on.
+- Collector 0.2.1: systemd user unit `rugwatch-collector`, RPC chain Helius -> Alchemy -> FluxRPC,
+  Helius billing day 17, stall and systemd watchdogs on. The create-log stream moves to FluxRPC's
+  websocket automatically if the public RPC rate-limits us (D-33, pre-approved).
+- Launch coverage: first daily check (12:16-13:16 UTC) 99.6% of ~1,481 creates on chain.
 - Next checkpoint: **2026-11-18 after 12:15 UTC** -> `make status` and `make report-day1`.
 
 ## Done
@@ -25,7 +27,12 @@ Last updated: 2026-11-17 12:35 UTC (end of session 4).
   - Pre-fix data policy and data clock (D-32).
   - GoPlus: permission email sent by the user; GoPlus stays in private analysis until they reply.
   - Disk: pip and JetBrains caches deleted (11.5 GB free).
-- 89 unit tests pass; ruff and mypy clean. Every change is committed and pushed.
+- Session 5 (2026-11-17):
+  - User ran the sudo cleanup: 21.9 GB free (target 20 GB met).
+  - FluxRPC websocket fallback built and deployed (0.2.1). Verified that both websockets deliver
+    create logs. The switch is flagged in `make status`, and FluxRPC bandwidth is tracked against
+    10 GB/month (alert 80%, stop 90%).
+- 93 unit tests pass; ruff and mypy clean. Every change is committed and pushed.
 
 ## M1 exit checks (HANDOFF section 6) and how they will be met
 
@@ -42,23 +49,22 @@ Last updated: 2026-11-17 12:35 UTC (end of session 4).
 
 ## Known problems and open decisions
 
-- Public RPC endpoint: free, not meant for sustained use. If `make status` shows
-  `rate_limited_24h` > 0, the proposed fallback is FluxRPC's websocket (needs the user's approval
-  and the dashboard's "WebSocket" value; D-31).
+- Public RPC endpoint: free, not meant for sustained use. If it rate-limits us, the stream moves to
+  FluxRPC automatically (D-33). `make status` shows "ON THE FLUXRPC FALLBACK" and the month's
+  FluxRPC bandwidth; above 90% of 10 GB the fallback is not used.
 - Launches created while a stream reconnects are not backfilled; the daily coverage check
   measures the loss.
 - With full coverage, 5 SOL passes about 4-5x more often than before; the tracked cap hash-samples
   for now, and rule 5.1 sets the threshold on day 1.
-- Disk: 11.5 GB free; the user's sudo cleanup will add about 9.7 GB, and the Chrome and VS Code
-  caches another 5.2 GB.
+- Disk: 21.9 GB free; raw data grows about 110-130 MB/day. The Chrome and VS Code caches (5.2 GB)
+  can still go whenever both apps are closed.
 - Credits: projection about 715k/30 d (target 800k). Recheck after a day at full coverage.
 - Observed curve fee 125-203 bps per side (mean 173), above the 125 bps placeholder.
 
 ## What the user needs to do
 
-1. **Now:** paste the sudo cleanup block from the session-4 answer (journal, apt, old snaps).
-   Later, close Chrome and VS Code and run `rm -rf ~/.cache/google-chrome ~/.cache/vscode-cpptools`,
-   or tell Claude to do it.
+1. Optional: close Chrome and VS Code and run `rm -rf ~/.cache/google-chrome ~/.cache/vscode-cpptools`
+   (5.2 GB), or tell Claude to do it.
 2. **When GoPlus replies:** paste the answer into a session.
 3. **By 2026-11-20 12:15 UTC (day 3):** Solana Tracker account; add `SOLANATRACKER_API_KEY` to
    `.env`. Say whether GoPlus gave a key only or a key plus secret.
