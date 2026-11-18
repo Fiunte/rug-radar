@@ -1,0 +1,20 @@
+# systemd user unit: a Claude Code Remote Control server for this repo, so the Claude app on the phone
+# can always reach a session here. Installed by `make install-remote`. Starts at boot (linger) and comes
+# back by itself: when claude exits (e.g. after ~10 min without network) the tmux session ends and
+# systemd restarts it after 30 s; a restarted server brings back the sessions it served.
+# See the URL / QR code (spacebar) with: tmux -L claude-rc attach -t rc   (detach: Ctrl+b then d)
+[Unit]
+Description=Claude Code Remote Control server (phone access to this repo)
+StartLimitIntervalSec=0
+
+[Service]
+Type=forking
+WorkingDirectory=@REPO@
+Environment=PATH=@HOME@/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/tmux -L claude-rc new-session -d -s rc -x 160 -y 48 "claude remote-control --name rug-radar --spawn same-dir"
+ExecStop=-/usr/bin/tmux -L claude-rc kill-server
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=default.target

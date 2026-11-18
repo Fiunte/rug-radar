@@ -1,0 +1,10 @@
+# systemd user unit, started by rugwatch-health.timer. Installed by `make install-service`.
+# Health checks against fixed thresholds, phone alerts, daily summary, reminders (decisions D-35).
+[Unit]
+Description=rugwatch health checks and alerts (ntfy)
+
+[Service]
+Type=oneshot
+WorkingDirectory=@REPO@
+ExecStart=@REPO@/.venv/bin/python -m rugwatch.collector.health run
+TimeoutStartSec=120

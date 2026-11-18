@@ -174,3 +174,79 @@ variable. If FluxRPC still fails, say so and it will be removed (decision D-20).
 ## 6. Letting Claude push without asking
 In Claude Code, run `/permissions` -> Allow -> add the rule `Bash(git push origin main)`. Force pushes
 stay forbidden by `CLAUDE.md`.
+
+## 7. Phone alerts, daily summary and reminders (decision D-35)
+A systemd timer runs the health checks every 10 minutes (`make install-service` installs it). It
+sends a notification when a check has failed twice in a row, one "Recovered" message when it has
+passed twice in a row, and nothing in between. A daily summary arrives at 12:30 Lisbon time. If it
+doesn't arrive, the alerting itself is down: say so to Claude. Reminders come from the
+"Checkpoints and reminders" table in `docs/status.md`.
+
+Setup (once):
+1. Install the **ntfy** app (Google Play / F-Droid / App Store).
+2. In a terminal on the laptop (a normal terminal, so the topic name stays out of the chat):
+   `cd ~/rug-radar && t=$(openssl rand -hex 12) && printf 'NTFY_TOPIC=%s\n' "$t" >> .env && echo "$t"`
+   It prints the topic name. Anyone who knows the name can read the alerts, so keep it private.
+3. In the ntfy app: **+** -> topic = the printed name, server `ntfy.sh` (default) -> Subscribe.
+4. healthchecks.io (free): sign up, **Add Check**, name it `heartbeat`, Period **10 minutes**, Grace
+   **20 minutes**. Under **Integrations** add **ntfy** (server `https://ntfy.sh`, the same topic,
+   priority high), or keep the e-mail integration. Copy the check's ping URL
+   (`https://hc-ping.com/...`) into `.env` as `HEALTHCHECKS_PING_URL=<that URL>`.
+5. Tell Claude "alerts are set up". Claude runs `make notify-test`, which sends a test notification
+   and the first ping. `make health` shows every check now.
+
+The laptop can't report its own outage: if it is off, asleep or offline, healthchecks.io notices
+that the pings have stopped and alerts within about 30 minutes.
+
+### Health checks
+
+Normal ranges are from 2026-11-17/18. Thresholds are rechecked at day 7.
+
+| Check | Alert when | Normal | A failure means |
+| --- | --- | --- | --- |
+| collector service | not `active` | active | The collector is down. systemd restarts it within 5 s, so a lasting failure is a crash loop or a config error. |
+| collector heartbeat | older than 300 s | under 70 s | Running but stuck. The systemd watchdog should kill and restart it. |
+| last launch seen | older than 900 s | seconds | Both launch streams are silent. The stall watchdog restarts after 600 s; this means it didn't help. |
+| launches per hour | under 700 | 1,323-2,931 | Launches are being missed, or pump.fun activity collapsed. |
+| create-log stream share | under 90% of launches | 99.8% | The public-RPC stream is connected but delivering little. |
+| PumpPortal share | under 10% of launches | 20-26% | PumpPortal is degraded. It is also the only source of migrations. |
+| launch coverage | under 95%, or no check in 26 h | 99.6-99.8% | The daily check against the chain failed or didn't run. |
+| Helius credit projection | over 850,000/30 d, last throttle step, or hard stop | 715k-815k, throttle 0-2 | The free credit budget is at risk. |
+| RPC error rate | over 5% of calls in the current + previous hour | ~0% | Helius/Alchemy are failing (key, outage, rate limit). |
+| public RPC rate limiting | any in 24 h | 0 | The free endpoint is limiting us. The FluxRPC fallback should take over. |
+| create-log stream endpoint | `fluxrpc` | `publicrpc` | The fallback is in use. That is fine for hours, but it uses FluxRPC bandwidth. |
+| FluxRPC bandwidth | 80% of 10 GB this month | 0% | The fallback stops at 90%. |
+| clock | not NTP-synced or offset over 2 s | under 10 ms | Timestamps are unreliable (HANDOFF risk 11). |
+| free disk | under 10 GB | 26 GB | The collector stops at 0.5 GB. About 0.1 GB of raw data a day. |
+| collector crashes | any in 24 h | 0 | A crash, watchdog kill or disk-full stop. Deploy restarts exit cleanly and don't count. |
+| stall restarts | 3 or more in 24 h | 0 | One is the watchdog doing its job; repeated ones mean a source is broken. |
+| collector step errors | 5 or more in 24 h | 0 | Internal exceptions in polling steps. |
+
+## 8. Talking to Claude from the phone (Remote Control, decision D-36)
+The laptop runs a Claude Code Remote Control server for this repo (`claude-remote` systemd user unit,
+`make install-remote`). It starts at boot without a login. If it exits (for example after about
+10 minutes offline), systemd restarts it after 30 s, and the restarted server brings back its
+sessions (up to about 4 hours later; after that it starts a fresh one).
+
+Once only, accept Remote Control in its terminal:
+1. `tmux -L claude-rc attach -t rc`
+2. Press `y` at `Enable Remote Control? (y/n)`. It shows the session URL; spacebar shows a QR code.
+3. Detach with Ctrl+b, then d. The server keeps running.
+
+Connect from the phone:
+1. Install the Claude app and sign in with the same account as Claude Code on the laptop.
+2. Tap **Code** in the navigation. The session `rug-radar` has a computer icon with a green dot
+   while it is online. Tap it and type as here, for example "run the day-3 checkpoint". Scanning
+   the QR code from step 2 above also opens it.
+3. If the app asks you to verify the device (Trusted Devices), do it once.
+4. Optional: in Claude Code run `/config` and turn on **Push when actions required**, so the phone
+   is notified when Claude waits for a permission.
+
+Notes:
+- Claude runs on the laptop; the app only shows the session. While the laptop is off, the session
+  is offline.
+- A Remote Control transcript is stored on Anthropic's servers (that is how it syncs). Never paste
+  keys into it, same as here.
+- Phone sessions and terminal sessions share the repo folder; use one at a time.
+- Check it: `systemctl --user status claude-remote`. Turn it off:
+  `systemctl --user disable --now claude-remote`.

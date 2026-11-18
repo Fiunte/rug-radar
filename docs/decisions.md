@@ -316,6 +316,46 @@ https://docs.solanatracker.io/pricing.md
     used to overlap and sum to 120%), with a new row for real SOL >= 4. The uptime windows start at
     the data clock (the 10-day public-RPC figure counted the hours before that stream existed).
   - Collector 0.2.2.
+- **D-35 Phone alerts, daily summary and reminders (user request 2026-11-18).** No frontend until
+  there is something besides collector health to show (the dashboard is M4).
+  - `rugwatch.collector.health`, run every 10 minutes by `rugwatch-health.timer` (systemd user
+    unit on the collector machine; it is part of running the collector, not a desktop workload).
+    `make health` prints every check and sends nothing.
+  - 17 checks over values `make status` shows; thresholds and normal ranges are in
+    `docs/runbook.md` section 7 and at the top of `health.py`. They are set from the spec (95%
+    coverage, 2 s clock, 800k credits), the collector's own limits (heartbeat, 600 s stall
+    watchdog) and the data so far (hourly launches 1,323-2,931, so the floor is 700/h; create-log
+    share 99.8%; PumpPortal share 20-26%). Recheck once at day 7.
+  - Fewer false alarms: a check alerts after failing 2 runs in a row and recovers after passing 2
+    in a row; one message each, nothing in between. One stall restart or deploy restart is not an
+    alert: crashes (non-zero exit other than the stall exit 70, watchdog kills, disk full) are, and
+    so are 3+ stall restarts in 24 h. Throttle levels 1-2 are the budget working as designed and
+    appear in the daily summary only. The alert is for the last throttle step, a hard stop, or a
+    projection over 850k (6% over target).
+  - The hourly launch rate is scaled to the minutes the collector was alive, so after a shutdown
+    it does not alert for the hour that was missed (the outage itself is healthchecks.io's job).
+  - Delivery: ntfy (free, no account; the random topic `NTFY_TOPIC` is the only secret). Telegram
+    would be more private but needs a bot token to manage; health numbers do not need it. Messages
+    carry numbers and check names only: no keys, no URLs, no project name.
+  - Dead-man's switch: every run pings `HEALTHCHECKS_PING_URL` (healthchecks.io, free). A laptop
+    that is off, asleep or offline cannot alert. The daily summary alone would notice up to 24 h
+    late, twice the whole 10-day uptime allowance (12 h).
+  - Daily summary at 12:30 local time (Europe/Lisbon = UTC in winter): "all OK" or the warnings,
+    key numbers, the next reminder.
+  - Reminders: each row of the "Checkpoints and reminders" table in `docs/status.md` is sent once
+    when due (rows more than 7 days late are skipped). Claude rows say what to type ("run the day-3
+    checkpoint"); at a checkpoint Claude runs the make commands itself.
+  - Alerts end with "Open Claude Code and say 'run make status'" rather than "paste it". The user
+    asked (item 3, 2026-11-18) that Claude run the make commands itself.
+- **D-36 Remote Control server for phone access (user request 2026-11-18).** `claude remote-control
+  --name rug-radar --spawn same-dir` in a detached tmux session (socket `claude-rc`), run by the
+  `claude-remote` systemd user unit (`make install-remote`). The unit starts at boot through linger.
+  Server mode exits after about 10 minutes without network; tmux then ends, and systemd restarts it
+  after 30 s (no start limit). A restarted server brings back the sessions it served for about 4 h.
+  tmux gives the server the terminal it expects, and lets the user attach to see the URL / QR code.
+  Remote Control's one-time "Enable Remote Control?" consent is left to the user. GitHub pushes from
+  these sessions work without an SSH agent (checked). Not a project workload, so HANDOFF's hardware
+  line is unchanged.
 
 ## C. M1 measurements so far (2026-11-17, trial runs of ~10 minutes)
 
@@ -391,6 +431,10 @@ Day 1 (`make report-day1`, 2026-11-18 22:09 UTC, 34 h since the data clock):
   5 drops in 24 h (42 s disconnected); public-RPC stream 1 drop (1 s); no rate limiting.
 
 ## D. Open items
+
+- Collector location (asked 2026-11-18). The user sometimes takes the laptop to class, and every
+  shutdown is a data gap. Options and costs went to the user; moving the collector changes HANDOFF
+  section 0 (hardware), so it waits for their decision.
 
 - Launch discovery: resolved by D-31 (approved 2026-11-17); first coverage numbers in section C.
 - Day 3: measure RugCheck / GoPlus limits and on-time coverage; verify the Solana Tracker response

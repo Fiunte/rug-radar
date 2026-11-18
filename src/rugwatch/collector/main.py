@@ -43,7 +43,8 @@ HOUSEKEEPING_S = 5.0
 STATE_KEEP_DAYS = 21  # untracked launches older than this leave the state database (raw keeps them)
 REQUIRED_ENV = ("HELIUS_API_KEY",)
 OPTIONAL_ENV = ("ALCHEMY_API_KEY", "FLUXRPC_API_KEY", "FLUXRPC_RPC_URL", "FLUXRPC_WS_URL",
-                "SOLANATRACKER_API_KEY", "RUGCHECK_API_KEY", "GOPLUS_API_KEY", "HELIUS_BILLING_DAY")
+                "SOLANATRACKER_API_KEY", "RUGCHECK_API_KEY", "GOPLUS_API_KEY", "HELIUS_BILLING_DAY",
+                "NTFY_TOPIC", "HEALTHCHECKS_PING_URL")
 
 
 def data_base() -> Path:

@@ -1,0 +1,12 @@
+# Every 10 minutes, on the clock (the 12:30 run sends the daily summary). Persistent: a run missed
+# while the laptop was off happens at boot.
+[Unit]
+Description=rugwatch health checks every 10 minutes
+
+[Timer]
+OnCalendar=*:0/10
+AccuracySec=30s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

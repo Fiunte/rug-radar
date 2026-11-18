@@ -5,16 +5,16 @@ option and log it in `docs/decisions.md`. Change `config.yaml` values only via H
 
 ## Session protocol
 - Start: read `docs/status.md` first; tell the user where we are in 3 lines.
-- End: update `docs/status.md` (single source of truth): what's done, current milestone, next
-  steps, exactly what the user must do (and when), date of the next checkpoint.
+- End: update `docs/status.md` (single source of truth): done, milestone, next steps, what the user
+  must do and when, and its reminders table (ntfy sends each row when due).
+- Checkpoints: run the make commands yourself; ask the user only for what you can't see (Helius dashboard).
 - Version control is Claude's job: `git pull --ff-only` before work; commit each working change
   with a clear message and push right after. Never force-push or rewrite history.
-- Machine: the laptop has `~/.config/systemd/user/rugwatch-collector.service` and runs only the
-  collector. The desktop (WSL) runs parsing, training, simulator, dashboard (`docs/runbook.md`).
+- Machine: the laptop runs only the collector, plus its health timer and the Remote Control server
+  (systemd user units). The desktop (WSL) runs parsing, training, simulator, dashboard (runbook).
 
 ## Hard rules (HANDOFF section 0)
-- Paper trading only. No private keys, wallet/keypair objects, `sendTransaction` or signing code
-  anywhere in the repo. `make test` greps `src/` for them and fails on a hit.
+- Paper trading only: no private keys, wallet/keypair objects, `sendTransaction` or signing code (`make test` greps).
 - Time-based splits only. Never a random split. Never plain accuracy as a headline.
 - No leakage: a feature for snapshot S uses only rows with `available_at <= snapshot_ts(S)`, via
   the as-of loader; the four leakage tests must pass.
@@ -25,5 +25,5 @@ option and log it in `docs/decisions.md`. Change `config.yaml` values only via H
   claim sentence, or any step towards real trading.
 
 ## Working notes
-- Python 3.12 via `uv` (never touch the system python3); use the HANDOFF section 2 `make` targets.
-- A negative result is acceptable; report measured values only.
+- Python 3.12 via `uv` (never the system python3); HANDOFF section 2 `make` targets. A negative
+  result is acceptable; report measured values only.

@@ -17,6 +17,8 @@ make test             # unit tests + no-signing check
 make lint             # ruff + mypy
 make install-service  # systemd user unit, starts now, survives logout and reboot
 make status           # uptime, last event age, credits, websocket drops, disk
+make health           # every health check against its alert threshold, and the reminders (sends nothing)
+make notify-test      # test notification to the phone (ntfy) + healthchecks.io ping
 make report-day1      # after 24 h: launches/day, pass counts per threshold, credits
 make report-week1     # after 7 days: credits per tracked token, storage/day, fees, scanners
 make backup        # on the DESKTOP: pull data/ from the laptop over SSH (docs/runbook.md)
@@ -24,7 +26,8 @@ make backup        # on the DESKTOP: pull data/ from the laptop over SSH (docs/r
 
 Environment variables (in `.env`, never committed): `HELIUS_API_KEY` (required), `ALCHEMY_API_KEY`
 (fallback), `FLUXRPC_API_KEY` (optional: emergency RPC tier and the websocket fallback of the create-log stream; `FLUXRPC_RPC_URL` / `FLUXRPC_WS_URL` override the URLs), `SOLANATRACKER_API_KEY` (from day 3),
-`RUGCHECK_API_KEY` (optional), `HELIUS_BILLING_DAY` (optional, day of month the credits reset).
+`RUGCHECK_API_KEY` (optional), `HELIUS_BILLING_DAY` (optional, day of month the credits reset),
+`NTFY_TOPIC` and `HEALTHCHECKS_PING_URL` (phone alerts, `docs/runbook.md` section 7).
 
 Service control:
 
