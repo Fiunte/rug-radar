@@ -73,11 +73,14 @@ def _fmt_q(q: dict[str, float], scale: float = 1.0, digits: int = 1) -> str:
 
 
 def uptime(db: sqlite3.Connection, now: float, window_s: float) -> tuple[float, float, float] | None:
-    """Shares of minutes over the window: alive, PumpPortal connected, public-RPC stream connected."""
+    """Shares of minutes over the window: alive, PumpPortal connected, public-RPC stream connected.
+    The window never starts before the data clock (D-32): the public-RPC stream did not exist earlier."""
     first = db.execute("SELECT MIN(minute) FROM heartbeats").fetchone()[0]
     if first is None:
         return None
-    start = max(first, int((now - window_s) // 60))
+    clock = db.execute("SELECT value FROM meta WHERE key='data_clock_start'").fetchone()
+    clock_min = int(float(clock[0]) // 60) if clock and clock[0] else 0
+    start = max(first, clock_min, int((now - window_s) // 60))
     total = int(now // 60) - start + 1
     cols = {r[1] for r in db.execute("PRAGMA table_info(heartbeats)")}
     rpc_col = "COALESCE(SUM(rpcws_connected),0)" if "rpcws_connected" in cols else "0"
@@ -294,15 +297,18 @@ def report_day1(cfg: Config) -> list[str]:
                      "AND t.launch_obs>=?", (d, clock)).fetchone()[0]
     out += ["", f"## Outcome of the {d} s tick (share of launches that reached it: n={tot:,})", ""]
     if tot:
+        # Mutually exclusive rows (they sum to n): quote currency first, then the SOL-quoted outcomes.
+        other_quote = f"(t.quote_mint IS NOT NULL AND t.quote_mint NOT IN ({sol}))"
+        sol_ok = f"f.status='ok' AND NOT {other_quote}"
+        floor = flt.floor_sol * LAMPORTS_PER_SOL
         rows = {
-            "graduated before the tick (outside the universe)":
-                "f.status='ok' AND f.complete=1",
+            "quoted in another token, not SOL (outside the universe)": f"f.status='ok' AND {other_quote}",
+            "graduated before the tick (outside the universe)": f"{sol_ok} AND f.complete=1",
             "empty curve, real SOL = 0 (dead; outside the universe)":
-                "f.status='ok' AND f.complete=0 AND f.real_sol=0",
-            f"0 < real SOL < {flt.floor_sol:g}":
-                f"f.status='ok' AND f.complete=0 AND f.real_sol>0 AND f.real_sol<{flt.floor_sol * LAMPORTS_PER_SOL}",
-            "quoted in another token, not SOL (outside the universe)":
-                f"f.status='ok' AND t.quote_mint IS NOT NULL AND t.quote_mint NOT IN ({sol})",
+                f"{sol_ok} AND f.complete=0 AND f.real_sol=0",
+            f"0 < real SOL < {flt.floor_sol:g}": f"{sol_ok} AND f.complete=0 AND f.real_sol>0 AND f.real_sol<{floor}",
+            f"real SOL >= {flt.floor_sol:g} (candidates for the filter)":
+                f"{sol_ok} AND f.complete=0 AND f.real_sol>={floor}",
             "tick missed by the collector": "f.status='missed'",
             "read failed or account missing": "f.status NOT IN ('ok','missed')",
         }

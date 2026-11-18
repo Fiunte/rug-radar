@@ -153,7 +153,7 @@ def _launch(env: Env, mint: str, t: float, curve: str = CURVE) -> None:
 
 
 def test_filter_ticks_decision_and_snapshot_start(env_factory: Callable[..., Env]) -> None:
-    reserves = {"rich": 6 * SOL, "poor": SOL // 10}
+    reserves = {"poor": SOL // 10}  # "rich" is set from the configured threshold below
 
     def handler(method: str, params: list[Any]) -> Any:
         assert method == "getMultipleAccounts" and params[1]["commitment"] == "confirmed"
@@ -161,6 +161,7 @@ def test_filter_ticks_decision_and_snapshot_start(env_factory: Callable[..., Env
                                                  else None for a in params[0]]}
 
     env = env_factory(handler)
+    reserves["rich"] = int(env.cfg.activity_filter.threshold_sol + 1) * SOL
     sched, snaps = make_scheduler(env)
     # Decisions are stamped with the RPC response time (the real clock), so the history must be
     # recent relative to the real clock: random-rest sampling is then ~0.1%.

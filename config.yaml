@@ -34,7 +34,7 @@ activity_filter:
   metric: real_sol_reserves    # SOL in curve, excluding virtual reserves
   tick_s: [60, 180, 300]       # polled for every launched token
   decide_at_s: 300
-  threshold_sol: 5.0           # PLACEHOLDER — set by rule 5.1
+  threshold_sol: 15.0          # rule 5.1, day 1 (2026-11-18): 462 passes/day at 300 s; recheck day 7
   threshold_grid_sol: [4, 5, 7.5, 10, 15, 20, 30]
   floor_sol: 4.0               # 0.5% of 4 SOL = min position size
   freeze_after_day: 14

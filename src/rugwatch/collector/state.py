@@ -209,9 +209,16 @@ class State:
                 None if complete is None else int(complete)))
 
     # ------------------------------------------------------------ tracking
-    def count_decided(self, since: float, column: str) -> int:
+    def count_decided(self, since: float, column: str, threshold_sol: float | None = None) -> int:
+        """Decisions since `since`. With `threshold_sol`, filter_pass / eligible_rest are recounted against
+        that threshold from the stored real SOL, so a threshold change (rule 5.1) takes effect at once."""
         assert column in ("filter_pass", "eligible_rest", "tracked")
-        return int(self.one(f"SELECT COALESCE(SUM({column}),0) FROM tracking WHERE decided_at>=?", (since,)))
+        if threshold_sol is None or column == "tracked":
+            return int(self.one(f"SELECT COALESCE(SUM({column}),0) FROM tracking WHERE decided_at>=?", (since,)))
+        side = ">=" if column == "filter_pass" else "<"
+        return int(self.one("SELECT COUNT(*) FROM tracking WHERE decided_at>=? AND (filter_pass=1 OR eligible_rest=1) "
+                            f"AND CASE WHEN filter_real_sol_300 IS NULL THEN {column}=1 "
+                            f"ELSE filter_real_sol_300 {side} ? END", (since, threshold_sol)))
 
     def first_decision_ts(self) -> float | None:
         value = self.one("SELECT MIN(decided_at) FROM tracking")

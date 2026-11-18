@@ -341,3 +341,17 @@ def test_fluxrpc_ws_url_and_http_metering(monkeypatch: pytest.MonkeyPatch, tmp_p
     asyncio.run(go())
     assert state.one("SELECT messages FROM bandwidth_ledger WHERE channel='fluxrpc_http'") == 1
     assert state.bandwidth_month("fluxrpc", time.time()) > 50
+
+
+def test_threshold_change_recounts_the_24h_pass_rate(env_factory: Any) -> None:
+    """Rule 5.1 can raise the threshold mid-day; the sampling rate must use the new threshold at once."""
+    env: Env = env_factory(lambda m, p: None)
+    now = time.time()
+    rows = [(f"a{i}", 6.0, 1, 0) for i in range(300)] + [(f"b{i}", 20.0, 1, 0) for i in range(100)] \
+        + [(f"c{i}", 1.0, 0, 1) for i in range(50)]
+    env.state.db.executemany(
+        "INSERT INTO tracking(mint,decided_at,launch_obs,filter_real_sol_300,filter_pass,eligible_rest,tracked,reason) "
+        "VALUES(?,?,?,?,?,?,0,'not_tracked')", [(m, now - 100, now - 400, sol, fp, er) for m, sol, fp, er in rows])
+    assert env.state.count_decided(now - 86400, "filter_pass") == 400  # as decided at the old 5 SOL threshold
+    assert env.state.count_decided(now - 86400, "filter_pass", 15.0) == 100
+    assert env.state.count_decided(now - 86400, "eligible_rest", 15.0) == 350

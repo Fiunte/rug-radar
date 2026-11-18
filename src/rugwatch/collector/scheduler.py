@@ -117,7 +117,8 @@ class Scheduler:
             # Counts restart with the data clock (D-32): before it, only ~22% of launches were seen, so
             # mixing in that period would overstate every sampling probability for a day.
             clock = self.state.data_clock_start() or 0.0
-            count = self.state.count_decided(max(now - 86400, clock), column) + 1  # + the token being decided
+            count = self.state.count_decided(max(now - 86400, clock), column,
+                                             self.flt.threshold_sol) + 1  # + the token being decided
             first = self.state.first_decision_ts()
             start = None if first is None else max(first, clock)
             elapsed = 86400.0 if start is None else min(86400.0, max(now - start, MIN_RATE_WINDOW_S))

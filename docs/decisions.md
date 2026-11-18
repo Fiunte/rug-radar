@@ -296,6 +296,26 @@ https://docs.solanatracker.io/pricing.md
     hourly return to the public endpoint matters.
   - The raw `source` and `launch_sources.source` name the endpoint (`publicrpc` or `fluxrpc`), so
     the coverage check reports them separately. Collector 0.2.1. The data clock is unchanged.
+- **D-34 Day-1 checkpoint, rule 5.1 (2026-11-18 22:09 UTC, 34 h of data since the data clock).**
+  - Pass counts per day at 300 s (SOL-quoted, not graduated): 4 SOL 956, 5: 863, 7.5: 711,
+    10: 601, **15: 462**, 20: 351, 30: 187. Rule 5.1.2 gives `threshold_sol` = 15 (was 5).
+    Rules 5.1.3 and 5.1.4 do not apply. Recheck at day 7 with the 7-day median (rule 5.1.6).
+  - Day-1 tokens tracked at 5-15 SOL stay in `tracking` with `filter_real_sol_300`, so the 15 SOL
+    universe can be rebuilt from day 1. This is before the day-14 freeze, so `universe_version`
+    stays 1 and the data clock is unchanged.
+  - The 24 h pass rate behind the hash-sampling cap is now recounted against the current threshold
+    from the stored real SOL. Otherwise, for a day after the change, about 860 passes at 5 SOL would
+    have set the sampling probability for 15 SOL tokens (500/860 instead of 1).
+  - Credits: the ledger shows 47,184 this cycle, against 47,395 on the Helius dashboard (22:05
+    Lisbon = UTC). The difference is 0.4%, so the ledger reconciles (HANDOFF risk 4). Projection
+    755k/30 d. The throttle reached level 2 (steps 1-2: balance cadence x2 after 3600 s, random
+    rest 50/day) at 09:00 UTC on a projection of 801k. The tracked count barely changes with the new
+    threshold (462 passes against the 500 cap), so it may stay on. Rule 5.1.5 sets the tracked cap
+    at day 7.
+  - Report fixes: the 300 s outcome rows are now mutually exclusive (non-SOL quote first; they
+    used to overlap and sum to 120%), with a new row for real SOL >= 4. The uptime windows start at
+    the data clock (the 10-day public-RPC figure counted the hours before that stream existed).
+  - Collector 0.2.2.
 
 ## C. M1 measurements so far (2026-11-17, trial runs of ~10 minutes)
 
@@ -356,6 +376,19 @@ After the second launch source (data clock start 2026-11-17 12:11:51 UTC):
 - Raw storage of the public-RPC stream: 0.3 MB in 24 min (about 19 MB/day).
 - First automatic daily check (window 12:16-13:16 UTC): about 1,481 creates on chain (about
   35k/day at this hour); all sources 99.6%, public RPC 99.4%, PumpPortal 26.5%.
+
+Day 1 (`make report-day1`, 2026-11-18 22:09 UTC, 34 h since the data clock):
+
+- Launches: 71,209 seen = 50,339/day. That is about twice the HANDOFF's public figure (~26,000/day),
+  and the chain check agrees: 2,529 creates on chain in 60 min (11-18, 12:22-13:22 UTC), 99.8%
+  seen (public RPC 99.8%, PumpPortal 22.9%). Per UTC hour: 1,323 (lowest, 04-10 UTC) to 2,931.
+- At the 300 s tick (n=71,185): quoted in another token 24.2%; SOL-quoted: graduated 1.0%, empty
+  curve 3.6%, 0 < real SOL < 4 69.1%, real SOL >= 4 1.9%; read failed 0.1%; missed 0. In the
+  write-up (risk 10), 1.3% of the SOL-quoted launches graduated before 300 s and 4.8% were already
+  empty.
+- Launch latency (observed_at minus creation block_time): median 0.90 s, p99 1.86 s.
+- Reliability: 4 service stops in 10 days, all deploys with exit 0; 0 stall restarts; PumpPortal
+  5 drops in 24 h (42 s disconnected); public-RPC stream 1 drop (1 s); no rate limiting.
 
 ## D. Open items
 
